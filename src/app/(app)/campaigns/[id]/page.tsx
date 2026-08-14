@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { TemplateEditor } from "./template-editor";
 import { StatusControl, AddRecipientsForm, RemoveMemberButton } from "./campaign-controls";
+import { SendControls } from "./send-controls";
 
 const MEMBERS_DISPLAY_CAP = 200;
 
@@ -38,6 +39,8 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
         </div>
         <StatusControl campaignId={id} status={campaign.status} />
       </div>
+
+      <SendControls />
 
       <section className="mt-8">
         <h2 className="text-lg font-medium">Sequence</h2>

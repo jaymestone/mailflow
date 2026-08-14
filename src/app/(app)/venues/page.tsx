@@ -1,7 +1,10 @@
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
+import { resolveLocation } from "@/lib/geocode/resolveLocation";
 
 const PAGE_SIZE = 50;
+const MILES_TO_METERS = 1609.34;
+const RADIUS_RESULT_CAP = 500;
 
 type SearchParams = {
   list?: string;
@@ -11,6 +14,23 @@ type SearchParams = {
   venue_type?: string;
   q?: string;
   page?: string;
+  near?: string;
+  radius_min?: string;
+  radius_max?: string;
+};
+
+type ContactRow = {
+  id: string;
+  first_name: string | null;
+  last_name: string | null;
+  email: string;
+  venue: string | null;
+  venue_type: string | null;
+  city: string | null;
+  state: string | null;
+  country: string | null;
+  list_id: string | null;
+  geocode_status: string;
 };
 
 export default async function VenuesPage({
@@ -27,29 +47,71 @@ export default async function VenuesPage({
   const from = (page - 1) * PAGE_SIZE;
   const to = from + PAGE_SIZE - 1;
 
-  let query = supabase
-    .from("contacts")
-    .select(
-      "id, first_name, last_name, email, venue, venue_type, city, state, country, list_id, geocode_status",
-      { count: "exact" },
-    )
-    .order("venue", { ascending: true, nullsFirst: false })
-    .range(from, to);
+  let contacts: ContactRow[] | null = null;
+  let count: number | null = null;
+  let radiusNote: string | null = null;
+  let radiusCapped = false;
 
-  if (params.list) query = query.eq("list_id", params.list);
-  if (params.country) query = query.ilike("country", params.country);
-  if (params.state) query = query.ilike("state", params.state);
-  if (params.city) query = query.ilike("city", params.city);
-  if (params.venue_type) query = query.ilike("venue_type", `%${params.venue_type}%`);
-  if (params.q) {
-    query = query.or(
-      `venue.ilike.%${params.q}%,city.ilike.%${params.q}%,first_name.ilike.%${params.q}%,last_name.ilike.%${params.q}%,email.ilike.%${params.q}%`,
-    );
+  if (params.near) {
+    const center = await resolveLocation(supabase, params.near);
+    if (!center) {
+      radiusNote = `Couldn't find a location matching "${params.near}".`;
+    } else {
+      const minMiles = parseFloat(params.radius_min ?? "0") || 0;
+      const maxMiles = params.radius_max ? parseFloat(params.radius_max) || null : null;
+
+      const { data, error } = await supabase.rpc("contacts_search_radius", {
+        center_lat: center.lat,
+        center_lng: center.lng,
+        min_meters: minMiles * MILES_TO_METERS,
+        max_meters: maxMiles ? maxMiles * MILES_TO_METERS : null,
+        list_filter: params.list || null,
+        result_limit: RADIUS_RESULT_CAP,
+      });
+
+      if (error) {
+        radiusNote = `Radius search failed: ${error.message}`;
+      } else {
+        const rows: ContactRow[] = data ?? [];
+        contacts = rows;
+        count = rows.length;
+        radiusCapped = rows.length === RADIUS_RESULT_CAP;
+        radiusNote = maxMiles
+          ? `Venues ${minMiles > 0 ? `${minMiles}–` : "within "}${maxMiles} miles of "${params.near}"`
+          : `Venues within ${minMiles} miles of "${params.near}"`;
+      }
+    }
   }
 
-  const { data: contacts, count } = await query;
+  if (contacts === null) {
+    let query = supabase
+      .from("contacts")
+      .select(
+        "id, first_name, last_name, email, venue, venue_type, city, state, country, list_id, geocode_status",
+        { count: "exact" },
+      )
+      .order("venue", { ascending: true, nullsFirst: false })
+      .range(from, to);
+
+    if (params.list) query = query.eq("list_id", params.list);
+    if (params.country) query = query.ilike("country", params.country);
+    if (params.state) query = query.ilike("state", params.state);
+    if (params.city) query = query.ilike("city", params.city);
+    if (params.venue_type) query = query.ilike("venue_type", `%${params.venue_type}%`);
+    if (params.q) {
+      query = query.or(
+        `venue.ilike.%${params.q}%,city.ilike.%${params.q}%,first_name.ilike.%${params.q}%,last_name.ilike.%${params.q}%,email.ilike.%${params.q}%`,
+      );
+    }
+
+    const result = await query;
+    contacts = result.data;
+    count = result.count;
+  }
+
   const listNameById = new Map((lists ?? []).map((l) => [l.id, l.name]));
-  const totalPages = count ? Math.ceil(count / PAGE_SIZE) : 1;
+  const isRadiusMode = Boolean(params.near);
+  const totalPages = isRadiusMode ? 1 : count ? Math.ceil(count / PAGE_SIZE) : 1;
 
   function buildPageHref(targetPage: number) {
     const usp = new URLSearchParams(params as Record<string, string>);
@@ -131,6 +193,56 @@ export default async function VenuesPage({
           </Link>
         )}
       </form>
+
+      <form className="mt-3 flex flex-wrap items-end gap-3 border-t border-neutral-900 pt-3 text-sm" action="/venues">
+        <span className="pb-1.5 text-xs text-neutral-500">Or by distance:</span>
+        <Field label="Near">
+          <input
+            name="near"
+            defaultValue={params.near ?? ""}
+            placeholder="San Francisco, CA"
+            className="w-48 rounded-md border border-neutral-700 bg-neutral-950 px-2 py-1.5 text-neutral-100"
+          />
+        </Field>
+        <Field label="Min miles">
+          <input
+            name="radius_min"
+            type="number"
+            min={0}
+            defaultValue={params.radius_min ?? ""}
+            placeholder="0"
+            className="w-20 rounded-md border border-neutral-700 bg-neutral-950 px-2 py-1.5 text-neutral-100"
+          />
+        </Field>
+        <Field label="Max miles">
+          <input
+            name="radius_max"
+            type="number"
+            min={0}
+            defaultValue={params.radius_max ?? ""}
+            placeholder="50"
+            className="w-20 rounded-md border border-neutral-700 bg-neutral-950 px-2 py-1.5 text-neutral-100"
+          />
+        </Field>
+        <button
+          type="submit"
+          className="rounded-md bg-neutral-50 px-3 py-1.5 text-sm font-medium text-neutral-950"
+        >
+          Search
+        </button>
+        {params.near && (
+          <Link href="/venues" className="text-xs text-neutral-500 hover:text-neutral-300">
+            Clear
+          </Link>
+        )}
+      </form>
+
+      {radiusNote && (
+        <p className="mt-4 text-pretty text-sm text-neutral-400">
+          {radiusNote}
+          {radiusCapped && ` — showing the nearest ${RADIUS_RESULT_CAP}.`}
+        </p>
+      )}
 
       <div className="mt-6 overflow-x-auto rounded-lg border border-neutral-800">
         <table className="w-full text-left text-sm">

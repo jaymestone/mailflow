@@ -1,7 +1,9 @@
 import { createServerClient } from "@supabase/ssr";
 import { type NextRequest, NextResponse } from "next/server";
 
-const PUBLIC_PATHS = ["/login", "/auth/callback"];
+// /api/cron/* authenticates via a shared secret (checked in the route
+// itself) since cron callers have no user session.
+const PUBLIC_PATHS = ["/login", "/auth/callback", "/api/cron"];
 
 export async function proxy(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request });

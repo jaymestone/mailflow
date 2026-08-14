@@ -1,0 +1,21 @@
+-- The actual `cron.schedule(...)` call for the geocode-tick job is NOT
+-- included here, since it embeds CRON_SECRET (a real secret) directly in
+-- the scheduled command text, and this file is committed to git.
+--
+-- It was applied once directly via psql. To recreate it after a database
+-- reset, run (with the real value of CRON_SECRET substituted, matching the
+-- Vercel env var of the same name):
+--
+-- select cron.schedule(
+--   'geocode-tick',
+--   '* * * * *',
+--   $$
+--   select net.http_post(
+--     url := 'https://mailflow-flame.vercel.app/api/cron/geocode',
+--     headers := jsonb_build_object('Content-Type', 'application/json', 'x-cron-secret', '<CRON_SECRET>'),
+--     body := '{}'::jsonb
+--   );
+--   $$
+-- );
+--
+-- To inspect/modify: select * from cron.job; select cron.unschedule('geocode-tick');

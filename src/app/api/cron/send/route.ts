@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { runSendTick } from "@/lib/send/tick";
+import { recordHeartbeat } from "@/lib/health/heartbeat";
 
 export const maxDuration = 60;
 
@@ -12,5 +13,6 @@ export async function POST(request: Request) {
 
   const admin = createAdminClient();
   const result = await runSendTick(admin);
+  await recordHeartbeat(admin, "send-engine-tick", result);
   return NextResponse.json(result);
 }

@@ -10,6 +10,7 @@ const NAV_ITEMS = [
   { href: "/settings/accounts", label: "Accounts" },
   { href: "/settings/import", label: "Import" },
   { href: "/settings/geocoding", label: "Geocoding" },
+  { href: "/settings/health", label: "Health" },
 ];
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {

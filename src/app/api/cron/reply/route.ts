@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { runReplyPollTick } from "@/lib/reply/tick";
+import { recordHeartbeat } from "@/lib/health/heartbeat";
 
 export const maxDuration = 60;
 
@@ -12,5 +13,6 @@ export async function POST(request: Request) {
 
   const admin = createAdminClient();
   const result = await runReplyPollTick(admin);
+  await recordHeartbeat(admin, "reply-poll-tick", result);
   return NextResponse.json(result);
 }

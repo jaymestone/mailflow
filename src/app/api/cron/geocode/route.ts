@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { runGeocodeTick } from "@/lib/geocode/tick";
+import { recordHeartbeat } from "@/lib/health/heartbeat";
 
 export const maxDuration = 60;
 
@@ -15,5 +16,6 @@ export async function POST(request: Request) {
 
   const supabase = createAdminClient();
   const result = await runGeocodeTick(supabase);
+  await recordHeartbeat(supabase, "geocode-tick", result);
   return NextResponse.json(result);
 }

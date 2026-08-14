@@ -1,0 +1,20 @@
+-- As with the geocode and send cron jobs, the actual `cron.schedule` call
+-- for reply-poll-tick was applied directly via psql (not here) since it
+-- embeds the real CRON_SECRET value, which must not be committed.
+--
+-- To recreate after a database reset, run (with the real CRON_SECRET
+-- substituted, matching the Vercel env var of the same name):
+--
+-- select cron.schedule(
+--   'reply-poll-tick',
+--   '*/5 * * * *',
+--   $$
+--   select net.http_post(
+--     url := 'https://mailflow-flame.vercel.app/api/cron/reply',
+--     headers := jsonb_build_object('Content-Type', 'application/json', 'x-cron-secret', '<CRON_SECRET>'),
+--     body := '{}'::jsonb
+--   );
+--   $$
+-- );
+--
+-- To inspect/modify: select * from cron.job; select cron.unschedule('reply-poll-tick');

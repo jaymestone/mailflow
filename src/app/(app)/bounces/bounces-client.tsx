@@ -20,7 +20,7 @@ export function RestoreButton({ id }: { id: string }) {
   }
 
   return (
-    <button onClick={restore} disabled={busy} className="text-xs text-neutral-400 hover:text-neutral-100 disabled:opacity-50">
+    <button onClick={restore} disabled={busy} className="text-xs text-accent hover:underline disabled:opacity-50">
       Restore
     </button>
   );

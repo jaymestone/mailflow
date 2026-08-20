@@ -26,30 +26,30 @@ export function DeliverabilityCheck({ domains }: { domains: string[] }) {
   }, [domains]);
 
   if (domains.length === 0) {
-    return <p className="text-sm text-neutral-500">Connect a sending account to check its domain.</p>;
+    return <p className="text-sm text-muted-3">Connect a sending account to check its domain.</p>;
   }
-  if (loading) return <p className="text-sm text-neutral-500">Checking DNS records…</p>;
+  if (loading) return <p className="text-sm text-muted-3">Checking DNS records…</p>;
 
   return (
-    <div className="overflow-x-auto rounded-lg border border-neutral-800">
+    <div className="overflow-x-auto">
       <table className="w-full text-left text-sm">
-        <thead className="border-b border-neutral-800 bg-neutral-900 text-xs uppercase text-neutral-500">
+        <thead className="border-b border-hairline-strong text-[10px] tracking-wide text-faint uppercase">
           <tr>
-            <th className="px-3 py-2">Domain</th>
-            <th className="px-3 py-2">SPF</th>
-            <th className="px-3 py-2">DMARC</th>
+            <th className="py-2 pr-3">Domain</th>
+            <th className="py-2 pr-3">SPF</th>
+            <th className="py-2 pr-3">DMARC</th>
           </tr>
         </thead>
         <tbody>
           {domains.map((d) => {
             const r = results[d];
             return (
-              <tr key={d} className="border-b border-neutral-900">
-                <td className="px-3 py-2 text-neutral-100">{d}</td>
-                <td className={`px-3 py-2 text-xs ${r?.spf.found ? "text-emerald-400" : "text-red-400"}`}>
+              <tr key={d} className="border-b border-hairline-soft">
+                <td className="py-2.5 pr-3 text-ink">{d}</td>
+                <td className={`py-2.5 pr-3 text-xs ${r?.spf.found ? "text-success" : "text-error"}`}>
                   {r?.spf.found ? "found" : "missing"}
                 </td>
-                <td className={`px-3 py-2 text-xs ${r?.dmarc.found ? "text-emerald-400" : "text-red-400"}`}>
+                <td className={`py-2.5 pr-3 text-xs ${r?.dmarc.found ? "text-success" : "text-error"}`}>
                   {r?.dmarc.found ? "found" : "missing"}
                 </td>
               </tr>

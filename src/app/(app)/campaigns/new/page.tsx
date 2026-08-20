@@ -31,15 +31,15 @@ export default function NewCampaignPage() {
 
   return (
     <div className="max-w-lg">
-      <h1 className="text-balance text-2xl font-semibold">New campaign</h1>
-      <form onSubmit={handleSubmit} className="mt-6 flex flex-col gap-4">
+      <h1 className="font-display text-[32px] font-medium text-ink">New campaign</h1>
+      <form onSubmit={handleSubmit} className="mt-7 flex flex-col gap-5">
         <Field label="Name">
           <input
             required
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="2026 Fall Roster Pitch"
-            className="rounded-md border border-neutral-700 bg-neutral-950 px-3 py-2 text-sm text-neutral-100"
+            className="border-0 border-b border-rule bg-transparent px-0.5 py-2 text-sm text-ink outline-none placeholder:text-faint-3"
           />
         </Field>
         <Field label="Artist(s)">
@@ -47,7 +47,7 @@ export default function NewCampaignPage() {
             value={artists}
             onChange={(e) => setArtists(e.target.value)}
             placeholder="Full roster"
-            className="rounded-md border border-neutral-700 bg-neutral-950 px-3 py-2 text-sm text-neutral-100"
+            className="border-0 border-b border-rule bg-transparent px-0.5 py-2 text-sm text-ink outline-none placeholder:text-faint-3"
           />
         </Field>
         <Field label="Notes">
@@ -55,14 +55,14 @@ export default function NewCampaignPage() {
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
             rows={3}
-            className="rounded-md border border-neutral-700 bg-neutral-950 px-3 py-2 text-sm text-neutral-100"
+            className="rounded-[2px] border border-hairline bg-surface px-3 py-2 text-sm text-ink outline-none"
           />
         </Field>
-        {error && <p className="text-pretty text-sm text-red-400">{error}</p>}
+        {error && <p className="text-pretty text-sm text-error">{error}</p>}
         <button
           type="submit"
           disabled={saving}
-          className="self-start rounded-lg bg-neutral-50 px-4 py-2 text-sm font-medium text-neutral-950 disabled:opacity-50"
+          className="self-start rounded-[2px] bg-ink px-[18px] py-2.5 text-xs font-semibold text-surface disabled:opacity-50"
         >
           {saving ? "Creating…" : "Create campaign"}
         </button>
@@ -73,8 +73,8 @@ export default function NewCampaignPage() {
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <label className="flex flex-col gap-1 text-sm">
-      <span className="text-neutral-400">{label}</span>
+    <label className="flex flex-col gap-1.5 text-sm">
+      <span className="text-[10px] tracking-wide text-faint uppercase">{label}</span>
       {children}
     </label>
   );

@@ -63,58 +63,52 @@ export function AccountRow({ account, isReplyTo }: { account: Account; isReplyTo
     router.refresh();
   }
 
-  const statusTone =
-    account.status === "active" ? "text-emerald-400" : account.status === "error" ? "text-red-400" : "text-neutral-500";
+  const statusTone = account.status === "active" ? "text-success" : account.status === "error" ? "text-error" : "text-faint";
 
   return (
-    <tr className="border-b border-neutral-900">
-      <td className="px-3 py-2 text-neutral-100">
-        {account.email_address}
-        {isReplyTo && (
-          <span className="ml-2 rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] uppercase text-neutral-400">
-            Reply-To
-          </span>
-        )}
-      </td>
-      <td className={`px-3 py-2 text-xs ${statusTone}`} title={account.last_error ?? ""}>
-        {account.status}
-      </td>
-      <td className="px-3 py-2 text-xs text-neutral-400">
-        {account.ramp_schedule.map((r) => r.cap).join(" → ")}/day
-      </td>
-      <td className="px-3 py-2">
-        <label className="flex items-center gap-1.5 text-xs text-neutral-400">
-          <input type="checkbox" checked={account.can_send} onChange={toggleCanSend} disabled={busy === "toggle"} />
-          Can send
-        </label>
-      </td>
-      <td className="px-3 py-2 text-right">
-        <div className="flex justify-end gap-2">
-          {!isReplyTo && (
-            <button
-              onClick={makeReplyTo}
-              disabled={busy !== null}
-              className="rounded-md bg-neutral-800 px-2 py-1 text-xs text-neutral-100 disabled:opacity-50"
-            >
-              Set as Reply-To
-            </button>
+    <div className="flex items-center justify-between rounded-[3px] border border-hairline bg-surface px-[22px] py-5">
+      <div>
+        <div className="flex items-center gap-2.5">
+          <span className="font-display text-[17px] text-ink">{account.email_address}</span>
+          {isReplyTo && (
+            <span className="rounded-full bg-accent-bg px-2 py-0.5 text-[10px] tracking-wide text-accent uppercase">
+              Reply-to
+            </span>
           )}
-          <button
-            onClick={testSend}
-            disabled={busy !== null || account.status === "disconnected"}
-            className="rounded-md bg-neutral-800 px-2 py-1 text-xs text-neutral-100 disabled:opacity-50"
-          >
-            {busy === "test" ? "Sending…" : "Test send"}
-          </button>
-          <button
-            onClick={disconnect}
-            disabled={busy !== null || account.status === "disconnected"}
-            className="rounded-md bg-neutral-800 px-2 py-1 text-xs text-red-400 disabled:opacity-50"
-          >
-            Disconnect
-          </button>
         </div>
-      </td>
-    </tr>
+        <div className="mt-1.5 text-xs text-muted-3" title={account.last_error ?? ""}>
+          <span className={statusTone}>&#9679; {account.status}</span> · {account.ramp_schedule.map((r) => r.cap).join(" → ")}/day
+          <label className="ml-3 inline-flex items-center gap-1.5 text-muted-3">
+            <input type="checkbox" checked={account.can_send} onChange={toggleCanSend} disabled={busy === "toggle"} />
+            Can send
+          </label>
+        </div>
+      </div>
+      <div className="flex shrink-0 gap-2.5">
+        {!isReplyTo && (
+          <button
+            onClick={makeReplyTo}
+            disabled={busy !== null}
+            className="rounded-[2px] bg-neutral-badge-bg px-3.5 py-1.5 text-[11px] text-ink-soft disabled:opacity-50"
+          >
+            Set as Reply-To
+          </button>
+        )}
+        <button
+          onClick={testSend}
+          disabled={busy !== null || account.status === "disconnected"}
+          className="rounded-[2px] bg-neutral-badge-bg px-3.5 py-1.5 text-[11px] text-ink-soft disabled:opacity-50"
+        >
+          {busy === "test" ? "Sending…" : "Test send"}
+        </button>
+        <button
+          onClick={disconnect}
+          disabled={busy !== null || account.status === "disconnected"}
+          className="rounded-[2px] border border-error/40 bg-transparent px-3.5 py-1.5 text-[11px] text-error disabled:opacity-50"
+        >
+          Disconnect
+        </button>
+      </div>
+    </div>
   );
 }

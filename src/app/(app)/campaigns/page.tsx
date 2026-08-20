@@ -11,54 +11,38 @@ export default async function CampaignsPage() {
 
   return (
     <div>
-      <div className="flex items-center justify-between">
-        <h1 className="text-balance text-2xl font-semibold">Campaigns</h1>
+      <div className="flex items-baseline justify-between">
+        <h1 className="font-display text-[32px] font-medium text-ink">Campaigns</h1>
         <Link
           href="/campaigns/new"
-          className="rounded-lg bg-neutral-50 px-4 py-2 text-sm font-medium text-neutral-950"
+          className="rounded-[2px] bg-ink px-[18px] py-2.5 text-xs font-semibold text-surface no-underline"
         >
           New campaign
         </Link>
       </div>
 
-      <div className="mt-6 overflow-x-auto rounded-lg border border-neutral-800">
-        <table className="w-full text-left text-sm">
-          <thead className="border-b border-neutral-800 bg-neutral-900 text-xs uppercase text-neutral-500">
-            <tr>
-              <th className="px-3 py-2">Name</th>
-              <th className="px-3 py-2">Artist(s)</th>
-              <th className="px-3 py-2">Status</th>
-              <th className="px-3 py-2">Members</th>
-              <th className="px-3 py-2">Created</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(campaigns ?? []).map((c) => (
-              <tr key={c.id} className="border-b border-neutral-900 hover:bg-neutral-900/50">
-                <td className="px-3 py-2">
-                  <Link href={`/campaigns/${c.id}`} className="text-neutral-100 hover:underline">
-                    {c.name}
-                  </Link>
-                </td>
-                <td className="px-3 py-2 text-neutral-400">{c.artists ?? "—"}</td>
-                <td className="px-3 py-2">
-                  <StatusBadge status={c.status} />
-                </td>
-                <td className="px-3 py-2 text-neutral-400">{c.campaign_members?.[0]?.count ?? 0}</td>
-                <td className="px-3 py-2 text-neutral-500">
-                  {new Date(c.created_at).toLocaleDateString()}
-                </td>
-              </tr>
-            ))}
-            {(campaigns ?? []).length === 0 && (
-              <tr>
-                <td colSpan={5} className="px-3 py-8 text-center text-neutral-500">
-                  No campaigns yet.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+      <div className="mt-7">
+        {(campaigns ?? []).map((c, i) => (
+          <Link
+            key={c.id}
+            href={`/campaigns/${c.id}`}
+            className="grid grid-cols-[44px_2fr_1fr_1fr_0.8fr] items-baseline border-b border-hairline py-5 text-ink no-underline"
+          >
+            <span className="font-display text-xl italic text-faint-2">{String(i + 1).padStart(2, "0")}</span>
+            <span>
+              <span className="block font-display text-[19px] text-ink">{c.name}</span>
+              <span className="text-xs text-muted-3">{c.artists ?? "Full roster"}</span>
+            </span>
+            <StatusBadge status={c.status} />
+            <span className="text-xs text-muted-2">{c.campaign_members?.[0]?.count ?? 0} members</span>
+            <span className="text-xs text-faint-2">
+              {new Date(c.created_at).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+            </span>
+          </Link>
+        ))}
+        {(campaigns ?? []).length === 0 && (
+          <div className="py-8 text-center text-sm text-muted-3">No campaigns yet.</div>
+        )}
       </div>
     </div>
   );
@@ -67,11 +51,9 @@ export default async function CampaignsPage() {
 function StatusBadge({ status }: { status: string }) {
   const tone =
     status === "active"
-      ? "text-emerald-400"
+      ? "text-success"
       : status === "paused"
-        ? "text-amber-400"
-        : status === "completed"
-          ? "text-neutral-500"
-          : "text-neutral-400";
-  return <span className={`text-xs capitalize ${tone}`}>{status}</span>;
+        ? "text-warning"
+        : "text-faint";
+  return <span className={`text-xs capitalize ${tone}`}>&#9679; {status}</span>;
 }

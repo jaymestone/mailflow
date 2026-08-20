@@ -1,7 +1,9 @@
 import { notFound } from "next/navigation";
+import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { TemplateEditor } from "./template-editor";
-import { StatusControl, AddRecipientsForm, RemoveMemberButton } from "./campaign-controls";
+import { StatusControl, RemoveMemberButton } from "./campaign-controls";
+import { RecipientPicker } from "./recipient-picker";
 import { SendControls } from "./send-controls";
 
 const MEMBERS_DISPLAY_CAP = 200;
@@ -32,83 +34,79 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
 
   return (
     <div>
-      <div className="flex items-start justify-between">
+      <Link href="/campaigns" className="text-xs text-muted-3 hover:text-accent">
+        ← Campaigns
+      </Link>
+      <div className="mt-2.5 flex items-start justify-between">
         <div>
-          <h1 className="text-balance text-2xl font-semibold">{campaign.name}</h1>
-          {campaign.artists && <p className="mt-1 text-sm text-neutral-400">{campaign.artists}</p>}
+          <h1 className="font-display text-[32px] font-medium text-ink">{campaign.name}</h1>
+          {campaign.artists && (
+            <p className="mt-1.5 font-display text-[15px] italic text-muted-2">{campaign.artists}</p>
+          )}
         </div>
         <StatusControl campaignId={id} status={campaign.status} />
       </div>
 
       <SendControls />
 
-      <section className="mt-8">
-        <h2 className="text-lg font-medium">Sequence</h2>
-        <p className="mt-1 text-pretty text-sm text-neutral-400">
-          Spintext <code className="text-neutral-300">{"{a|b}"}</code> and merge fields{" "}
-          <code className="text-neutral-300">{"{{First Name}}"}</code> resolve at send time.
+      <section className="mt-11">
+        <h2 className="font-display text-[21px] font-medium text-ink">Sequence</h2>
+        <p className="mt-1.5 text-pretty text-[13px] text-muted-2">
+          Spintext <code className="text-ink-soft">{"{a|b}"}</code> and merge fields{" "}
+          <code className="text-ink-soft">{"{{First Name}}"}</code> resolve at send time.
         </p>
         <TemplateEditor campaignId={id} templates={templates ?? []} />
       </section>
 
-      <section className="mt-10">
-        <h2 className="text-lg font-medium">Recipients</h2>
-        <p className="mt-1 text-sm text-neutral-400">
-          {memberCount ?? 0} total
-          {Object.keys(statusCounts).length > 0 &&
-            ` — ${Object.entries(statusCounts)
-              .map(([k, v]) => `${v} ${k}`)
-              .join(", ")}`}
-        </p>
-        <div className="mt-3">
-          <AddRecipientsForm campaignId={id} lists={lists ?? []} />
+      <section className="mt-11">
+        <div className="flex items-baseline justify-between">
+          <h2 className="font-display text-[21px] font-medium text-ink">Recipients</h2>
+          <span className="text-xs text-muted-3">
+            {memberCount ?? 0} total
+            {Object.keys(statusCounts).length > 0 &&
+              ` — ${Object.entries(statusCounts)
+                .map(([k, v]) => `${v} ${k}`)
+                .join(", ")}`}
+          </span>
+        </div>
+        <div className="mt-4">
+          <RecipientPicker campaignId={id} lists={lists ?? []} />
         </div>
 
-        <div className="mt-4 overflow-x-auto rounded-lg border border-neutral-800">
-          <table className="w-full text-left text-sm">
-            <thead className="border-b border-neutral-800 bg-neutral-900 text-xs uppercase text-neutral-500">
-              <tr>
-                <th className="px-3 py-2">Contact</th>
-                <th className="px-3 py-2">Venue</th>
-                <th className="px-3 py-2">Email</th>
-                <th className="px-3 py-2">Step</th>
-                <th className="px-3 py-2">Status</th>
-                <th className="px-3 py-2">Last sent</th>
-                <th className="px-3 py-2"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {(members ?? []).map((m) => {
-                const contact = Array.isArray(m.contact) ? m.contact[0] : m.contact;
-                return (
-                  <tr key={m.id} className="border-b border-neutral-900">
-                    <td className="px-3 py-2 text-neutral-100">
-                      {[contact?.first_name, contact?.last_name].filter(Boolean).join(" ") || "—"}
-                    </td>
-                    <td className="px-3 py-2 text-neutral-400">{contact?.venue ?? "—"}</td>
-                    <td className="px-3 py-2 text-neutral-400">{contact?.email}</td>
-                    <td className="px-3 py-2 text-neutral-400">{m.current_step}</td>
-                    <td className="px-3 py-2 text-neutral-400">{m.member_status}</td>
-                    <td className="px-3 py-2 text-neutral-500">
-                      {m.last_sent_at ? new Date(m.last_sent_at).toLocaleDateString() : "—"}
-                    </td>
-                    <td className="px-3 py-2">
-                      {contact?.id && <RemoveMemberButton campaignId={id} contactId={contact.id} />}
-                    </td>
-                  </tr>
-                );
-              })}
-              {(members ?? []).length === 0 && (
-                <tr>
-                  <td colSpan={7} className="px-3 py-8 text-center text-neutral-500">
-                    No recipients yet.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+        <div className="mt-5">
+          <div className="grid grid-cols-[1.4fr_1.2fr_1.6fr_0.6fr_1fr_1fr_auto] border-b border-hairline-strong py-2 text-[10px] tracking-wide text-faint uppercase">
+            <span>Contact</span>
+            <span>Venue</span>
+            <span>Email</span>
+            <span>Step</span>
+            <span>Status</span>
+            <span>Last sent</span>
+            <span></span>
+          </div>
+          {(members ?? []).map((m) => {
+            const contact = Array.isArray(m.contact) ? m.contact[0] : m.contact;
+            return (
+              <div
+                key={m.id}
+                className="grid grid-cols-[1.4fr_1.2fr_1.6fr_0.6fr_1fr_1fr_auto] items-center border-b border-hairline-soft py-2.5 text-[13px]"
+              >
+                <span className="text-ink">{[contact?.first_name, contact?.last_name].filter(Boolean).join(" ") || "—"}</span>
+                <span className="text-muted-2">{contact?.venue ?? "—"}</span>
+                <span className="text-muted-2">{contact?.email}</span>
+                <span className="text-muted-2">{m.current_step}</span>
+                <MemberStatus status={m.member_status} />
+                <span className="text-faint-2">
+                  {m.last_sent_at ? new Date(m.last_sent_at).toLocaleDateString() : "—"}
+                </span>
+                <span>{contact?.id && <RemoveMemberButton campaignId={id} contactId={contact.id} />}</span>
+              </div>
+            );
+          })}
+          {(members ?? []).length === 0 && (
+            <div className="py-8 text-center text-sm text-muted-3">No recipients yet.</div>
+          )}
           {(memberCount ?? 0) > MEMBERS_DISPLAY_CAP && (
-            <p className="border-t border-neutral-800 px-3 py-2 text-xs text-neutral-500">
+            <p className="border-t border-hairline py-2.5 text-xs text-faint-3">
               Showing the most recently added {MEMBERS_DISPLAY_CAP} of {memberCount}.
             </p>
           )}
@@ -116,4 +114,14 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
       </section>
     </div>
   );
+}
+
+function MemberStatus({ status }: { status: string }) {
+  const tone =
+    status === "replied"
+      ? "text-success"
+      : status === "opted_out" || status === "opted out" || status === "bounced"
+        ? "text-error"
+        : "text-faint-2";
+  return <span className={tone}>{status}</span>;
 }

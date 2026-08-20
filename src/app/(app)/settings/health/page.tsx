@@ -25,21 +25,21 @@ export default async function HealthPage() {
 
   return (
     <div>
-      <h1 className="text-balance text-2xl font-semibold">System health</h1>
-      <p className="mt-2 text-pretty text-sm text-neutral-400">
+      <h1 className="font-display text-[32px] font-medium text-ink">System health</h1>
+      <p className="mt-2 text-pretty text-sm text-muted">
         Cron heartbeats, account status, and deliverability signals in one place.
       </p>
 
-      <section className="mt-6">
-        <h2 className="text-lg font-medium">Background jobs</h2>
-        <div className="mt-3 overflow-x-auto rounded-lg border border-neutral-800">
+      <section className="mt-8">
+        <h2 className="font-display text-[21px] font-medium text-ink">Background jobs</h2>
+        <div className="mt-3 overflow-x-auto">
           <table className="w-full text-left text-sm">
-            <thead className="border-b border-neutral-800 bg-neutral-900 text-xs uppercase text-neutral-500">
+            <thead className="border-b border-hairline-strong text-[10px] tracking-wide text-faint uppercase">
               <tr>
-                <th className="px-3 py-2">Job</th>
-                <th className="px-3 py-2">Expected interval</th>
-                <th className="px-3 py-2">Last run</th>
-                <th className="px-3 py-2">Status</th>
+                <th className="py-2 pr-3">Job</th>
+                <th className="py-2 pr-3">Expected interval</th>
+                <th className="py-2 pr-3">Last run</th>
+                <th className="py-2 pr-3">Status</th>
               </tr>
             </thead>
             <tbody>
@@ -49,13 +49,13 @@ export default async function HealthPage() {
                 const minutesAgo = lastRun ? (Date.now() - lastRun.getTime()) / 60000 : null;
                 const stale = minutesAgo === null || minutesAgo > intervalMin * 3;
                 return (
-                  <tr key={job} className="border-b border-neutral-900">
-                    <td className="px-3 py-2 text-neutral-100">{job}</td>
-                    <td className="px-3 py-2 text-neutral-500">every {intervalMin}m</td>
-                    <td className="px-3 py-2 text-neutral-400">
+                  <tr key={job} className="border-b border-hairline-soft">
+                    <td className="py-2.5 pr-3 text-ink">{job}</td>
+                    <td className="py-2.5 pr-3 text-faint-2">every {intervalMin}m</td>
+                    <td className="py-2.5 pr-3 text-muted-2">
                       {lastRun ? `${Math.round(minutesAgo!)}m ago` : "never run"}
                     </td>
-                    <td className={`px-3 py-2 text-xs ${stale ? "text-red-400" : "text-emerald-400"}`}>
+                    <td className={`py-2.5 pr-3 text-xs ${stale ? "text-error" : "text-success"}`}>
                       {stale ? "stale" : "healthy"}
                     </td>
                   </tr>
@@ -66,30 +66,30 @@ export default async function HealthPage() {
         </div>
       </section>
 
-      <section className="mt-8">
-        <h2 className="text-lg font-medium">Connected accounts</h2>
-        <div className="mt-3 overflow-x-auto rounded-lg border border-neutral-800">
+      <section className="mt-9">
+        <h2 className="font-display text-[21px] font-medium text-ink">Connected accounts</h2>
+        <div className="mt-3 overflow-x-auto">
           <table className="w-full text-left text-sm">
-            <thead className="border-b border-neutral-800 bg-neutral-900 text-xs uppercase text-neutral-500">
+            <thead className="border-b border-hairline-strong text-[10px] tracking-wide text-faint uppercase">
               <tr>
-                <th className="px-3 py-2">Address</th>
-                <th className="px-3 py-2">Status</th>
-                <th className="px-3 py-2">Last error</th>
+                <th className="py-2 pr-3">Address</th>
+                <th className="py-2 pr-3">Status</th>
+                <th className="py-2 pr-3">Last error</th>
               </tr>
             </thead>
             <tbody>
               {(accounts ?? []).map((a) => (
-                <tr key={a.id} className="border-b border-neutral-900">
-                  <td className="px-3 py-2 text-neutral-100">{a.email_address}</td>
-                  <td className={`px-3 py-2 text-xs ${a.status === "active" ? "text-emerald-400" : "text-red-400"}`}>
+                <tr key={a.id} className="border-b border-hairline-soft">
+                  <td className="py-2.5 pr-3 text-ink">{a.email_address}</td>
+                  <td className={`py-2.5 pr-3 text-xs ${a.status === "active" ? "text-success" : "text-error"}`}>
                     {a.status}
                   </td>
-                  <td className="px-3 py-2 text-xs text-neutral-500">{a.last_error ?? "—"}</td>
+                  <td className="py-2.5 pr-3 text-xs text-muted-3">{a.last_error ?? "—"}</td>
                 </tr>
               ))}
               {(accounts ?? []).length === 0 && (
                 <tr>
-                  <td colSpan={3} className="px-3 py-6 text-center text-neutral-500">
+                  <td colSpan={3} className="py-6 text-center text-muted-3">
                     No accounts connected yet.
                   </td>
                 </tr>
@@ -99,9 +99,9 @@ export default async function HealthPage() {
         </div>
       </section>
 
-      <section className="mt-8">
-        <h2 className="text-lg font-medium">Deliverability (SPF / DMARC)</h2>
-        <p className="mt-1 text-pretty text-sm text-neutral-400">
+      <section className="mt-9">
+        <h2 className="font-display text-[21px] font-medium text-ink">Deliverability (SPF / DMARC)</h2>
+        <p className="mt-1.5 text-pretty text-sm text-muted">
           Checked live against each connected account&apos;s sending domain.
         </p>
         <div className="mt-3">
@@ -109,26 +109,26 @@ export default async function HealthPage() {
         </div>
       </section>
 
-      <section className="mt-8">
-        <h2 className="text-lg font-medium">Recent send failures</h2>
-        <div className="mt-3 overflow-x-auto rounded-lg border border-neutral-800">
+      <section className="mt-9">
+        <h2 className="font-display text-[21px] font-medium text-ink">Recent send failures</h2>
+        <div className="mt-3 overflow-x-auto">
           <table className="w-full text-left text-sm">
-            <thead className="border-b border-neutral-800 bg-neutral-900 text-xs uppercase text-neutral-500">
+            <thead className="border-b border-hairline-strong text-[10px] tracking-wide text-faint uppercase">
               <tr>
-                <th className="px-3 py-2">When</th>
-                <th className="px-3 py-2">Error</th>
+                <th className="py-2 pr-3">When</th>
+                <th className="py-2 pr-3">Error</th>
               </tr>
             </thead>
             <tbody>
               {(recentFailures ?? []).map((f) => (
-                <tr key={f.id} className="border-b border-neutral-900">
-                  <td className="px-3 py-2 text-neutral-500">{new Date(f.created_at).toLocaleString()}</td>
-                  <td className="px-3 py-2 text-neutral-300">{f.error_message}</td>
+                <tr key={f.id} className="border-b border-hairline-soft">
+                  <td className="py-2.5 pr-3 text-faint-2">{new Date(f.created_at).toLocaleString()}</td>
+                  <td className="py-2.5 pr-3 text-ink-soft">{f.error_message}</td>
                 </tr>
               ))}
               {(recentFailures ?? []).length === 0 && (
                 <tr>
-                  <td colSpan={2} className="px-3 py-6 text-center text-neutral-500">
+                  <td colSpan={2} className="py-6 text-center text-muted-3">
                     No failed sends.
                   </td>
                 </tr>

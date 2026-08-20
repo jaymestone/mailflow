@@ -19,25 +19,25 @@ export default async function GeocodingPage() {
 
   return (
     <div>
-      <h1 className="text-balance text-2xl font-semibold">Geocoding</h1>
-      <p className="mt-2 text-pretty text-sm text-neutral-400">
+      <h1 className="font-display text-[32px] font-medium text-ink">Geocoding</h1>
+      <p className="mt-2 max-w-[62ch] text-pretty text-sm text-muted">
         Venue city/state/country combinations are geocoded once and shared across every contact
         in that location. A backfill tick processes 20 locations at a time against OpenStreetMap
         (rate-limited to 1 request/second) and runs automatically every minute; you can also run
         it manually below.
       </p>
 
-      <div className="mt-6 grid grid-cols-4 gap-4 rounded-lg border border-neutral-800 bg-neutral-900 p-4 text-center">
+      <div className="mt-7 grid grid-cols-4 gap-4 rounded-[3px] border border-hairline bg-surface p-5 text-center">
         <Stat label="Pending" value={pending ?? 0} />
-        <Stat label="Resolved" value={success ?? 0} tone="text-emerald-400" />
-        <Stat label="No match" value={noMatch ?? 0} tone="text-neutral-400" />
-        <Stat label="Failed" value={failed ?? 0} tone="text-red-400" />
+        <Stat label="Resolved" value={success ?? 0} tone="text-success" />
+        <Stat label="No match" value={noMatch ?? 0} tone="text-muted-2" />
+        <Stat label="Failed" value={failed ?? 0} tone="text-error" />
       </div>
 
       <BackfillRunner pendingCount={pending ?? 0} />
 
-      <h2 className="mt-10 text-lg font-medium">Needs manual review</h2>
-      <p className="mt-1 text-pretty text-sm text-neutral-400">
+      <h2 className="mt-11 font-display text-[21px] font-medium text-ink">Needs manual review</h2>
+      <p className="mt-1.5 max-w-[62ch] text-pretty text-sm text-muted">
         These locations couldn&apos;t be resolved automatically. Set coordinates by hand (e.g. from
         Google Maps) to unblock the contacts at that location.
       </p>
@@ -49,8 +49,8 @@ export default async function GeocodingPage() {
 function Stat({ label, value, tone }: { label: string; value: number; tone?: string }) {
   return (
     <div>
-      <div className={`text-2xl font-semibold ${tone ?? "text-neutral-50"}`}>{value}</div>
-      <div className="text-pretty text-xs text-neutral-500">{label}</div>
+      <div className={`font-display text-2xl ${tone ?? "text-ink"}`}>{value}</div>
+      <div className="mt-1 text-pretty text-xs text-muted-3">{label}</div>
     </div>
   );
 }

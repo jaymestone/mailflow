@@ -23,54 +23,37 @@ export default async function AccountsPage({
 
   return (
     <div>
-      <h1 className="text-balance text-2xl font-semibold">Connected accounts</h1>
-      <p className="mt-2 text-pretty text-sm text-neutral-400">
-        Connect 4-6 Gmail accounts to send from on a rotation, respecting each account&apos;s daily
-        cap and ramp-up schedule. Pick one as the Reply-To address that receives human replies.
+      <h1 className="font-display text-[32px] font-medium text-ink">Sending accounts</h1>
+      <p className="mt-2 max-w-[62ch] text-pretty text-sm text-muted">
+        Connected mailboxes, ramp schedules, and reply-to routing. Connect 4-6 Gmail accounts to
+        send from on a rotation, each respecting its own daily cap and ramp-up schedule.
       </p>
 
       {params.oauth === "success" && (
-        <p className="mt-4 rounded-md bg-emerald-500/10 px-3 py-2 text-sm text-emerald-400">
+        <p className="mt-4 rounded-[2px] bg-success-bg px-3.5 py-2.5 text-sm text-success">
           Connected {params.detail}.
         </p>
       )}
       {params.oauth === "error" && (
-        <p className="mt-4 rounded-md bg-red-500/10 px-3 py-2 text-sm text-red-400">
+        <p className="mt-4 rounded-[2px] bg-error-bg px-3.5 py-2.5 text-sm text-error">
           Connection failed: {params.detail}
         </p>
       )}
 
       <a
         href="/api/oauth/google/connect"
-        className="mt-4 inline-block rounded-lg bg-neutral-50 px-4 py-2 text-sm font-medium text-neutral-950"
+        className="mt-4 inline-block rounded-[2px] bg-ink px-4 py-2.5 text-sm font-semibold text-surface no-underline"
       >
         Connect Gmail account
       </a>
 
-      <div className="mt-6 overflow-x-auto rounded-lg border border-neutral-800">
-        <table className="w-full text-left text-sm">
-          <thead className="border-b border-neutral-800 bg-neutral-900 text-xs uppercase text-neutral-500">
-            <tr>
-              <th className="px-3 py-2">Address</th>
-              <th className="px-3 py-2">Status</th>
-              <th className="px-3 py-2">Ramp schedule</th>
-              <th className="px-3 py-2">Sending</th>
-              <th className="px-3 py-2"></th>
-            </tr>
-          </thead>
-          <tbody>
-            {(accounts ?? []).map((a) => (
-              <AccountRow key={a.id} account={a} isReplyTo={a.id === replyToAccountId} />
-            ))}
-            {(accounts ?? []).length === 0 && (
-              <tr>
-                <td colSpan={5} className="px-3 py-8 text-center text-neutral-500">
-                  No accounts connected yet.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+      <div className="mt-7 flex flex-col gap-3.5">
+        {(accounts ?? []).map((a) => (
+          <AccountRow key={a.id} account={a} isReplyTo={a.id === replyToAccountId} />
+        ))}
+        {(accounts ?? []).length === 0 && (
+          <div className="py-8 text-center text-sm text-muted-3">No accounts connected yet.</div>
+        )}
       </div>
     </div>
   );

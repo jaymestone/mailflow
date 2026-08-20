@@ -1,26 +1,103 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --color-paper: oklch(97% 0.008 75);
+  --color-surface: oklch(99% 0.004 75);
+  --color-ink: oklch(18% 0.01 75);
+  --color-ink-soft: oklch(35% 0.01 75);
+  --color-muted: oklch(45% 0.01 75);
+  --color-muted-2: oklch(50% 0.01 75);
+  --color-muted-3: oklch(52% 0.01 75);
+  --color-faint: oklch(55% 0.01 75);
+  --color-faint-2: oklch(58% 0.01 75);
+  --color-faint-3: oklch(60% 0.01 75);
+  --color-hairline: oklch(88% 0.008 75);
+  --color-hairline-soft: oklch(91% 0.006 75);
+  --color-hairline-strong: oklch(85% 0.008 75);
+  --color-rule: oklch(80% 0.01 75);
+
+  --color-accent: oklch(52% 0.14 35);
+  --color-accent-hover: oklch(42% 0.14 35);
+  --color-accent-bg: oklch(93% 0.03 35);
+
+  --color-success: oklch(50% 0.12 150);
+  --color-success-bg: oklch(93% 0.04 150);
+  --color-warning: oklch(60% 0.13 85);
+  --color-warning-bg: oklch(94% 0.05 85);
+  --color-error: oklch(48% 0.15 25);
+  --color-error-bg: oklch(93% 0.05 25);
+  --color-neutral-badge-bg: oklch(93% 0.008 75);
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-display: var(--font-newsreader), ui-serif, Georgia, serif;
+  --font-sans: var(--font-public-sans), ui-sans-serif, system-ui, sans-serif;
+
+  --color-paper: var(--color-paper);
+  --color-surface: var(--color-surface);
+  --color-ink: var(--color-ink);
+  --color-ink-soft: var(--color-ink-soft);
+  --color-muted: var(--color-muted);
+  --color-muted-2: var(--color-muted-2);
+  --color-muted-3: var(--color-muted-3);
+  --color-faint: var(--color-faint);
+  --color-faint-2: var(--color-faint-2);
+  --color-faint-3: var(--color-faint-3);
+  --color-hairline: var(--color-hairline);
+  --color-hairline-soft: var(--color-hairline-soft);
+  --color-hairline-strong: var(--color-hairline-strong);
+  --color-rule: var(--color-rule);
+
+  --color-accent: var(--color-accent);
+  --color-accent-hover: var(--color-accent-hover);
+  --color-accent-bg: var(--color-accent-bg);
+
+  --color-success: var(--color-success);
+  --color-success-bg: var(--color-success-bg);
+  --color-warning: var(--color-warning);
+  --color-warning-bg: var(--color-warning-bg);
+  --color-error: var(--color-error);
+  --color-error-bg: var(--color-error-bg);
+  --color-neutral-badge-bg: var(--color-neutral-badge-bg);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+* {
+  box-sizing: border-box;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+}
+
+a {
+  color: var(--color-accent);
+  text-decoration: none;
+}
+
+a:hover {
+  color: var(--color-accent-hover);
+  text-decoration: underline;
+}
+
+input,
+select,
+textarea,
+button {
+  font-family: var(--font-sans);
+}
+
+::selection {
+  background: oklch(90% 0.05 35);
+}
+
+h1,
+h2,
+h3 {
+  text-wrap: balance;
+}
+
+p {
+  text-wrap: pretty;
 }

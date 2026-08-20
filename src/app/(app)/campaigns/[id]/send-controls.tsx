@@ -33,36 +33,35 @@ export function SendControls() {
   }
 
   return (
-    <div className="mt-3 rounded-lg border border-neutral-800 p-4">
-      <div className="flex items-center gap-3">
+    <div className="mt-6 rounded-[3px] border border-hairline bg-surface p-[18px_20px]">
+      <div className="flex flex-wrap items-center gap-4">
         <button
           onClick={() => run(true)}
           disabled={busy !== null}
-          className="rounded-md bg-neutral-800 px-3 py-1.5 text-sm text-neutral-100 disabled:opacity-50"
+          className="rounded-[2px] bg-neutral-badge-bg px-4 py-2.5 text-xs font-semibold text-ink-soft disabled:opacity-50"
         >
           {busy === "dry" ? "Running…" : "Dry run"}
         </button>
         <button
           onClick={() => run(false)}
           disabled={busy !== null}
-          className="rounded-md bg-neutral-50 px-3 py-1.5 text-sm font-medium text-neutral-950 disabled:opacity-50"
+          className="rounded-[2px] bg-ink px-4 py-2.5 text-xs font-semibold text-surface disabled:opacity-50"
         >
-          {busy === "live" ? "Sending…" : "Send Now"}
+          {busy === "live" ? "Sending…" : "Send now"}
         </button>
-        <span className="text-xs text-neutral-500">
-          Processes every due campaign across the account (not just this one), respecting the
-          round robin, daily caps, and suppression.
+        <span className="text-xs text-muted-3">
+          Processes every due campaign account-wide, respecting caps and suppression.
         </span>
       </div>
 
       {result && (
-        <div className="mt-3 text-sm">
-          <div className="text-neutral-300">
+        <div className="mt-4 text-sm">
+          <div className="text-ink-soft">
             Attempted {result.attempted} · Sent {result.sent} · Failed {result.failed} · No
             capacity {result.skippedNoCapacity} · Domain cap {result.skippedDomainCap} · Bad
             template {result.skippedUnresolvedTemplate}
           </div>
-          <ul className="mt-2 max-h-48 overflow-y-auto text-xs text-neutral-500">
+          <ul className="mt-2 max-h-48 overflow-y-auto text-xs text-faint">
             {result.details.map((d, i) => (
               <li key={i}>
                 {d.email || "(tick)"} — {d.outcome}

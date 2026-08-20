@@ -28,7 +28,7 @@ export function TemplateEditor({ campaignId, templates }: { campaignId: string; 
   const nextStepNumber = templates.length > 0 ? Math.max(...templates.map((t) => t.step_number)) + 1 : 1;
 
   return (
-    <div className="mt-3 flex flex-col gap-4">
+    <div className="mt-5 flex flex-col gap-3.5">
       {templates
         .sort((a, b) => a.step_number - b.step_number)
         .map((t) => (
@@ -60,7 +60,7 @@ export function TemplateEditor({ campaignId, templates }: { campaignId: string; 
       ) : (
         <button
           onClick={() => setEditingStep(nextStepNumber)}
-          className="self-start rounded-md border border-dashed border-neutral-700 px-3 py-1.5 text-sm text-neutral-400 hover:border-neutral-500 hover:text-neutral-200"
+          className="self-start rounded-[2px] border border-dashed border-rule px-3.5 py-2 text-xs text-muted-3 hover:border-accent hover:text-accent"
         >
           + Add step {nextStepNumber}
         </button>
@@ -126,96 +126,96 @@ function StepForm({
 
   if (!isEditing) {
     return (
-      <div className="rounded-lg border border-neutral-800 p-4">
-        <div className="flex items-center justify-between">
-          <div className="text-sm font-medium text-neutral-100">
-            Step {template.step_number}
-            {template.step_number > 1 && (
-              <span className="ml-2 text-xs font-normal text-neutral-500">
-                {template.days_after_previous} days after previous
-              </span>
-            )}
+      <div className="grid grid-cols-[36px_1fr] gap-4 border-t border-hairline-soft py-[18px]">
+        <span className="font-display text-[22px] italic text-faint-2">
+          {String(template.step_number).padStart(2, "0")}
+        </span>
+        <div>
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2.5">
+              <span className="text-sm font-semibold text-ink">{template.subject}</span>
+              {template.step_number > 1 && (
+                <span className="text-[11px] text-faint">{template.days_after_previous} days after previous</span>
+              )}
+            </div>
+            <div className="flex shrink-0 gap-3">
+              <button onClick={onEdit} className="text-xs text-muted-3 hover:text-accent">
+                Edit
+              </button>
+              <button onClick={remove} className="text-xs text-error hover:underline">
+                Delete
+              </button>
+            </div>
           </div>
-          <div className="flex gap-2">
-            <button onClick={onEdit} className="text-xs text-neutral-400 hover:text-neutral-100">
-              Edit
-            </button>
-            <button onClick={remove} className="text-xs text-red-400 hover:text-red-300">
-              Delete
-            </button>
-          </div>
+          <p className="mt-1.5 whitespace-pre-wrap text-[13px] text-muted">{template.body}</p>
         </div>
-        <div className="mt-2 text-sm text-neutral-300">{template.subject}</div>
-        <div className="mt-1 whitespace-pre-wrap text-xs text-neutral-500">{template.body}</div>
       </div>
     );
   }
 
   return (
-    <div className="rounded-lg border border-neutral-700 bg-neutral-900 p-4">
-      <div className="text-sm font-medium text-neutral-100">
+    <div className="rounded-[2px] border border-hairline-strong bg-surface p-5">
+      <div className="text-sm font-semibold text-ink">
         {isNew ? `New step ${template.step_number}` : `Editing step ${template.step_number}`}
       </div>
 
       {template.step_number > 1 && (
-        <label className="mt-3 flex items-center gap-2 text-xs text-neutral-400">
+        <label className="mt-3.5 flex items-center gap-2 text-xs text-muted-3">
           Days after previous step
           <input
             type="number"
             min={0}
             value={daysAfter}
             onChange={(e) => setDaysAfter(parseInt(e.target.value) || 0)}
-            className="w-16 rounded-md border border-neutral-700 bg-neutral-950 px-2 py-1 text-neutral-100"
+            className="w-16 border-0 border-b border-rule bg-transparent px-0.5 py-1 text-ink outline-none"
           />
         </label>
       )}
 
-      <label className="mt-3 block text-xs text-neutral-400">Subject</label>
+      <label className="mt-3.5 block text-[10px] tracking-wide text-faint uppercase">Subject</label>
       <input
         value={subject}
         onChange={(e) => setSubject(e.target.value)}
         placeholder="{Quick note|Reaching out} about {{Venue}}"
-        className="mt-1 w-full rounded-md border border-neutral-700 bg-neutral-950 px-3 py-2 text-sm text-neutral-100"
+        className="mt-1.5 w-full border-0 border-b border-rule bg-transparent px-0.5 py-2 text-sm text-ink outline-none placeholder:text-faint-3"
       />
 
-      <label className="mt-3 block text-xs text-neutral-400">Body</label>
+      <label className="mt-4 block text-[10px] tracking-wide text-faint uppercase">Body</label>
       <textarea
         value={body}
         onChange={(e) => setBody(e.target.value)}
         rows={8}
         placeholder={`Hi {{First Name}},\n\n...`}
-        className="mt-1 w-full rounded-md border border-neutral-700 bg-neutral-950 px-3 py-2 font-mono text-xs text-neutral-100"
+        className="mt-1.5 w-full rounded-[2px] border border-hairline bg-paper px-3 py-2.5 font-mono text-xs text-ink outline-none placeholder:text-faint-3"
       />
-      <p className="mt-1 text-xs text-neutral-600">
+      <p className="mt-2 text-xs text-faint-2">
         Spintext: {"{option a|option b}"}. Merge fields: {MERGE_FIELD_HELP}
       </p>
 
       <button
         onClick={() => setShowPreview((s) => !s)}
-        className="mt-2 text-xs text-neutral-400 underline hover:text-neutral-200"
+        className="mt-2.5 text-xs text-muted-3 underline hover:text-accent"
       >
         {showPreview ? "Hide" : "Show"} preview
       </button>
       {showPreview && (
-        <div className="mt-2 rounded-md border border-neutral-800 bg-neutral-950 p-3 text-xs">
-          <div className="text-neutral-300">{resolveTemplate(subject, PREVIEW_CONTACT)}</div>
-          <div className="mt-1 whitespace-pre-wrap text-neutral-500">
-            {resolveTemplate(body, PREVIEW_CONTACT)}
-          </div>
+        <div className="mt-2.5 rounded-[2px] border border-hairline bg-paper p-3.5 text-xs">
+          <div className="text-ink-soft">{resolveTemplate(subject, PREVIEW_CONTACT)}</div>
+          <div className="mt-1.5 whitespace-pre-wrap text-muted-2">{resolveTemplate(body, PREVIEW_CONTACT)}</div>
         </div>
       )}
 
-      {error && <p className="mt-2 text-xs text-red-400">{error}</p>}
+      {error && <p className="mt-2.5 text-xs text-error">{error}</p>}
 
-      <div className="mt-3 flex gap-2">
+      <div className="mt-4 flex gap-3">
         <button
           onClick={save}
           disabled={saving || !subject.trim() || !body.trim()}
-          className="rounded-md bg-neutral-50 px-3 py-1.5 text-xs font-medium text-neutral-950 disabled:opacity-50"
+          className="rounded-[2px] bg-ink px-3.5 py-2 text-xs font-semibold text-surface disabled:opacity-50"
         >
           {saving ? "Saving…" : "Save step"}
         </button>
-        <button onClick={onDone} className="rounded-md px-3 py-1.5 text-xs text-neutral-400">
+        <button onClick={onDone} className="px-1 py-2 text-xs text-muted-3 hover:text-ink">
           Cancel
         </button>
       </div>

@@ -1,17 +1,6 @@
-import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { SignOutButton } from "./sign-out-button";
-
-const NAV_ITEMS = [
-  { href: "/venues", label: "Venues" },
-  { href: "/campaigns", label: "Campaigns" },
-  { href: "/inbox", label: "Inbox" },
-  { href: "/bounces", label: "Bounces" },
-  { href: "/settings/accounts", label: "Accounts" },
-  { href: "/settings/import", label: "Import" },
-  { href: "/settings/geocoding", label: "Geocoding" },
-  { href: "/settings/health", label: "Health" },
-];
+import { NavTabs } from "./nav-tabs";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const supabase = await createClient();
@@ -20,28 +9,22 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   } = await supabase.auth.getUser();
 
   return (
-    <div className="flex min-h-screen bg-neutral-950 text-neutral-100">
-      <aside className="flex w-56 flex-col justify-between border-r border-neutral-800 p-4">
-        <div>
-          <div className="mb-6 px-2 text-lg font-semibold">MailFlow</div>
-          <nav className="flex flex-col gap-1">
-            {NAV_ITEMS.map((item) => (
-              <Link
-                key={item.href}
-                href={item.href}
-                className="rounded-md px-2 py-1.5 text-sm text-neutral-300 hover:bg-neutral-900 hover:text-neutral-50"
-              >
-                {item.label}
-              </Link>
-            ))}
-          </nav>
+    <div className="min-h-screen bg-paper text-ink">
+      <header className="border-b border-hairline bg-surface">
+        <div className="mx-auto max-w-[1080px] px-8 pt-5">
+          <div className="flex items-baseline justify-between">
+            <div className="font-display text-2xl italic">Mailflow</div>
+            <div className="flex items-center gap-4 text-xs text-muted-3">
+              <span>{user?.email}</span>
+              <SignOutButton />
+            </div>
+          </div>
+          <div className="mt-[22px]">
+            <NavTabs />
+          </div>
         </div>
-        <div className="px-2">
-          <div className="mb-2 truncate text-xs text-neutral-500">{user?.email}</div>
-          <SignOutButton />
-        </div>
-      </aside>
-      <main className="flex-1 overflow-y-auto p-8">{children}</main>
+      </header>
+      <main className="mx-auto max-w-[1080px] px-8 py-10 pb-20">{children}</main>
     </div>
   );
 }

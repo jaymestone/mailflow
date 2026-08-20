@@ -2,13 +2,13 @@ import { createClient } from "@/lib/supabase/server";
 import { PollNowButton, CategorySelect } from "./inbox-client";
 
 const CATEGORY_TONES: Record<string, string> = {
-  interested: "text-emerald-400",
-  not_interested: "text-neutral-500",
-  follow_up: "text-amber-400",
-  ooo: "text-neutral-500",
-  opt_out: "text-red-400",
-  bounce: "text-red-400",
-  unclear: "text-neutral-400",
+  interested: "text-success",
+  not_interested: "text-faint",
+  follow_up: "text-warning",
+  ooo: "text-faint",
+  opt_out: "text-error",
+  bounce: "text-error",
+  unclear: "text-muted-2",
 };
 
 export default async function InboxPage({
@@ -34,18 +34,20 @@ export default async function InboxPage({
 
   return (
     <div>
-      <div className="flex items-center justify-between">
-        <h1 className="text-balance text-2xl font-semibold">Inbox</h1>
+      <div className="flex items-baseline justify-between">
+        <h1 className="font-display text-[32px] font-medium text-ink">Inbox</h1>
         <PollNowButton />
       </div>
-      <p className="mt-2 text-pretty text-sm text-neutral-400">
-        Replies sorted by intent. Polls automatically every 5 minutes.
+      <p className="mt-2 text-pretty text-sm text-muted">
+        Replies pulled from every connected sending account.
       </p>
 
-      <div className="mt-4 flex flex-wrap gap-2 text-xs">
+      <div className="mt-5 flex flex-wrap gap-2 text-xs">
         <a
           href="/inbox"
-          className={`rounded-full px-3 py-1 ${!params.category ? "bg-neutral-50 text-neutral-950" : "bg-neutral-900 text-neutral-400"}`}
+          className={`rounded-full border px-3 py-1 no-underline ${
+            !params.category ? "border-ink bg-ink text-surface" : "border-hairline-strong text-muted-3"
+          }`}
         >
           All
         </a>
@@ -53,53 +55,59 @@ export default async function InboxPage({
           <a
             key={c}
             href={`/inbox?category=${c}`}
-            className={`rounded-full px-3 py-1 capitalize ${params.category === c ? "bg-neutral-50 text-neutral-950" : "bg-neutral-900 text-neutral-400"}`}
+            className={`rounded-full border px-3 py-1 capitalize no-underline ${
+              params.category === c ? "border-ink bg-ink text-surface" : "border-hairline-strong text-muted-3"
+            }`}
           >
             {c.replace("_", " ")}
           </a>
         ))}
       </div>
 
-      <div className="mt-4 flex flex-col gap-3">
+      <div className="mt-3">
         {(messages ?? []).map((m) => {
           const campaign = Array.isArray(m.campaign) ? m.campaign[0] : m.campaign;
           return (
-            <div key={m.id} className="rounded-lg border border-neutral-800 p-4">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <div className="text-sm text-neutral-100">
-                    {m.from_name ?? m.from_email} <span className="text-neutral-500">&lt;{m.from_email}&gt;</span>
-                  </div>
-                  <div className="mt-0.5 text-sm text-neutral-300">{m.subject}</div>
+            <div
+              key={m.id}
+              className="grid grid-cols-[1.4fr_3fr_1fr] items-start gap-5 border-b border-hairline py-[18px]"
+            >
+              <div>
+                <span className="block font-display text-base text-ink">{m.from_name ?? m.from_email}</span>
+                <span className="text-xs text-faint">{m.from_email}</span>
+              </div>
+              <div>
+                <span className="block text-sm font-semibold text-ink">{m.subject}</span>
+                <span className="line-clamp-2 text-[13px] text-muted-2">{m.body_text}</span>
+                <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[11px] text-faint-3">
+                  <span>{new Date(m.received_at).toLocaleString()}</span>
+                  {campaign?.name && <span>· {campaign.name}</span>}
+                  <span>· matched via {m.match_method}</span>
+                  {m.gmail_thread_id && (
+                    <a
+                      href={`https://mail.google.com/mail/u/0/#all/${m.gmail_thread_id}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-accent"
+                    >
+                      Open in Gmail
+                    </a>
+                  )}
                 </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  <span className={`text-xs capitalize ${CATEGORY_TONES[m.classification_category ?? "unclear"]}`}>
+              </div>
+              <div className="text-right">
+                <div className="flex flex-col items-end gap-1.5">
+                  <span className={`text-[11px] capitalize ${CATEGORY_TONES[m.classification_category ?? "unclear"]}`}>
                     {(m.classification_category ?? "unclear").replace("_", " ")}
                   </span>
                   <CategorySelect id={m.id} category={m.classification_category} />
                 </div>
               </div>
-              <p className="mt-2 line-clamp-3 text-xs text-neutral-500">{m.body_text}</p>
-              <div className="mt-2 flex items-center gap-3 text-xs text-neutral-600">
-                <span>{new Date(m.received_at).toLocaleString()}</span>
-                {campaign?.name && <span>· {campaign.name}</span>}
-                <span>· matched via {m.match_method}</span>
-                {m.gmail_thread_id && (
-                  <a
-                    href={`https://mail.google.com/mail/u/0/#all/${m.gmail_thread_id}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-neutral-400 hover:underline"
-                  >
-                    Open in Gmail
-                  </a>
-                )}
-              </div>
             </div>
           );
         })}
         {(messages ?? []).length === 0 && (
-          <p className="py-8 text-center text-sm text-neutral-500">No replies yet.</p>
+          <p className="py-8 text-center text-sm text-muted-3">No replies yet.</p>
         )}
       </div>
     </div>

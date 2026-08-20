@@ -36,22 +36,20 @@ export function BackfillRunner({ pendingCount }: { pendingCount: number }) {
   }
 
   return (
-    <div className="mt-4 flex items-center gap-3">
+    <div className="mt-5 flex items-center gap-3.5">
       <button
         onClick={runUntilDone}
         disabled={running || pendingCount === 0}
-        className="rounded-lg bg-neutral-50 px-4 py-2 text-sm font-medium text-neutral-950 disabled:opacity-50"
+        className="rounded-[2px] bg-ink px-4 py-2.5 text-sm font-semibold text-surface disabled:opacity-50"
       >
         {running ? "Running…" : "Run backfill now"}
       </button>
       {progress && (
-        <span className="text-sm text-neutral-400">
+        <span className="text-sm text-muted-2">
           {progress.done} processed, {progress.remaining} remaining
         </span>
       )}
-      {pendingCount === 0 && !running && (
-        <span className="text-sm text-neutral-500">Nothing pending.</span>
-      )}
+      {pendingCount === 0 && !running && <span className="text-sm text-muted-3">Nothing pending.</span>}
     </div>
   );
 }
@@ -75,67 +73,56 @@ export function ManualOverrideList({ locations }: { locations: FailedLocation[] 
   }
 
   if (locations.length === 0) {
-    return <p className="mt-4 text-sm text-neutral-500">No failed or unmatched locations.</p>;
+    return <p className="mt-4 text-sm text-muted-3">No failed or unmatched locations.</p>;
   }
 
   return (
-    <div className="mt-4 overflow-x-auto rounded-lg border border-neutral-800">
-      <table className="w-full text-left text-sm">
-        <thead className="border-b border-neutral-800 bg-neutral-900 text-xs uppercase text-neutral-500">
-          <tr>
-            <th className="px-3 py-2">Location</th>
-            <th className="px-3 py-2">Status</th>
-            <th className="px-3 py-2">Attempts</th>
-            <th className="px-3 py-2">Lat</th>
-            <th className="px-3 py-2">Lng</th>
-            <th className="px-3 py-2"></th>
-          </tr>
-        </thead>
-        <tbody>
-          {locations.map((loc) => (
-            <tr key={loc.id} className="border-b border-neutral-900">
-              <td className="px-3 py-2 text-neutral-100">
-                {[loc.city, loc.state, loc.country].filter(Boolean).join(", ")}
-              </td>
-              <td className="px-3 py-2 text-red-400">{loc.status}</td>
-              <td className="px-3 py-2 text-neutral-500">{loc.attempts}</td>
-              <td className="px-3 py-2">
-                <input
-                  type="number"
-                  step="any"
-                  placeholder="lat"
-                  value={values[loc.id]?.lat ?? ""}
-                  onChange={(e) =>
-                    setValues((s) => ({ ...s, [loc.id]: { ...s[loc.id], lat: e.target.value, lng: s[loc.id]?.lng ?? "" } }))
-                  }
-                  className="w-24 rounded-md border border-neutral-700 bg-neutral-950 px-2 py-1 text-neutral-100"
-                />
-              </td>
-              <td className="px-3 py-2">
-                <input
-                  type="number"
-                  step="any"
-                  placeholder="lng"
-                  value={values[loc.id]?.lng ?? ""}
-                  onChange={(e) =>
-                    setValues((s) => ({ ...s, [loc.id]: { ...s[loc.id], lng: e.target.value, lat: s[loc.id]?.lat ?? "" } }))
-                  }
-                  className="w-24 rounded-md border border-neutral-700 bg-neutral-950 px-2 py-1 text-neutral-100"
-                />
-              </td>
-              <td className="px-3 py-2">
-                <button
-                  onClick={() => save(loc.id)}
-                  disabled={savingId === loc.id || !values[loc.id]?.lat || !values[loc.id]?.lng}
-                  className="rounded-md bg-neutral-800 px-2 py-1 text-xs text-neutral-100 disabled:opacity-50"
-                >
-                  {savingId === loc.id ? "Saving…" : "Save"}
-                </button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <div className="mt-4">
+      <div className="grid grid-cols-[1.6fr_0.8fr_0.8fr_1fr_1fr_0.6fr] border-b border-hairline-strong py-2 text-[10px] tracking-wide text-faint uppercase">
+        <span>Location</span>
+        <span>Status</span>
+        <span>Attempts</span>
+        <span>Lat</span>
+        <span>Lng</span>
+        <span></span>
+      </div>
+      {locations.map((loc) => (
+        <div
+          key={loc.id}
+          className="grid grid-cols-[1.6fr_0.8fr_0.8fr_1fr_1fr_0.6fr] items-center border-b border-hairline-soft py-2.5 text-[13px]"
+        >
+          <span className="text-ink">{[loc.city, loc.state, loc.country].filter(Boolean).join(", ")}</span>
+          <span className="text-error">{loc.status}</span>
+          <span className="text-faint-2">{loc.attempts}</span>
+          <input
+            type="number"
+            step="any"
+            placeholder="lat"
+            value={values[loc.id]?.lat ?? ""}
+            onChange={(e) =>
+              setValues((s) => ({ ...s, [loc.id]: { ...s[loc.id], lat: e.target.value, lng: s[loc.id]?.lng ?? "" } }))
+            }
+            className="w-20 border-0 border-b border-rule bg-transparent px-0.5 py-1 text-ink outline-none"
+          />
+          <input
+            type="number"
+            step="any"
+            placeholder="lng"
+            value={values[loc.id]?.lng ?? ""}
+            onChange={(e) =>
+              setValues((s) => ({ ...s, [loc.id]: { ...s[loc.id], lng: e.target.value, lat: s[loc.id]?.lat ?? "" } }))
+            }
+            className="w-20 border-0 border-b border-rule bg-transparent px-0.5 py-1 text-ink outline-none"
+          />
+          <button
+            onClick={() => save(loc.id)}
+            disabled={savingId === loc.id || !values[loc.id]?.lat || !values[loc.id]?.lng}
+            className="justify-self-start rounded-[2px] bg-neutral-badge-bg px-2.5 py-1 text-xs text-ink-soft disabled:opacity-50"
+          >
+            {savingId === loc.id ? "Saving…" : "Save"}
+          </button>
+        </div>
+      ))}
     </div>
   );
 }

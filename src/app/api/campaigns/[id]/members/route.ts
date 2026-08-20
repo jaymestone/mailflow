@@ -1,29 +1,34 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
+// Takes explicit contact IDs (chosen via the recipient search/preview step)
+// rather than filters, so the picker can either select every match or a
+// hand-picked subset. Suppression is re-checked here defensively in case it
+// changed between the search preview and this add call.
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id: campaignId } = await params;
-  const filters = await request.json();
+  const { contactIds } = await request.json();
+
+  if (!Array.isArray(contactIds) || contactIds.length === 0) {
+    return NextResponse.json({ error: "contactIds (non-empty array) required" }, { status: 400 });
+  }
 
   const supabase = await createClient();
 
-  let query = supabase.from("contacts").select("id, email");
-  if (filters.list_id) query = query.eq("list_id", filters.list_id);
-  if (filters.state) query = query.ilike("state", filters.state);
-  if (filters.city) query = query.ilike("city", filters.city);
-  if (filters.country) query = query.ilike("country", filters.country);
-
-  const { data: matchingContacts, error: contactsError } = await query;
+  const { data: contacts, error: contactsError } = await supabase
+    .from("contacts")
+    .select("id, email")
+    .in("id", contactIds);
   if (contactsError) return NextResponse.json({ error: contactsError.message }, { status: 500 });
-  if (!matchingContacts || matchingContacts.length === 0) {
+  if (!contacts || contacts.length === 0) {
     return NextResponse.json({ added: 0, skippedSuppressed: 0 });
   }
 
   const { data: suppressed } = await supabase.from("suppression").select("email");
   const suppressedEmails = new Set((suppressed ?? []).map((s) => s.email.toLowerCase()));
 
-  const eligible = matchingContacts.filter((c) => !suppressedEmails.has(c.email.toLowerCase()));
-  const skippedSuppressed = matchingContacts.length - eligible.length;
+  const eligible = contacts.filter((c) => !suppressedEmails.has(c.email.toLowerCase()));
+  const skippedSuppressed = contacts.length - eligible.length;
 
   if (eligible.length === 0) {
     return NextResponse.json({ added: 0, skippedSuppressed });

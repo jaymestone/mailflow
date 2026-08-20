@@ -29,11 +29,11 @@ export function PollNowButton() {
       <button
         onClick={poll}
         disabled={busy}
-        className="rounded-lg bg-neutral-50 px-4 py-2 text-sm font-medium text-neutral-950 disabled:opacity-50"
+        className="rounded-[2px] bg-ink px-4 py-2.5 text-xs font-semibold text-surface disabled:opacity-50"
       >
         {busy ? "Polling…" : "Poll now"}
       </button>
-      {result && <span className="text-xs text-neutral-500">{result}</span>}
+      {result && <span className="text-xs text-muted-3">{result}</span>}
     </div>
   );
 }
@@ -58,7 +58,7 @@ export function CategorySelect({ id, category }: { id: string; category: string 
       value={category ?? "unclear"}
       onChange={(e) => change(e.target.value)}
       disabled={busy}
-      className="rounded-md border border-neutral-700 bg-neutral-950 px-2 py-1 text-xs text-neutral-100"
+      className="rounded-full border border-hairline-strong bg-surface px-2.5 py-1 text-[11px] text-ink-soft"
     >
       {CATEGORIES.map((c) => (
         <option key={c} value={c}>

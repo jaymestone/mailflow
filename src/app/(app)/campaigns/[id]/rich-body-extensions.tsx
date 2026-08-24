@@ -5,6 +5,8 @@ import { Paragraph } from "@tiptap/extension-paragraph";
 import { Text } from "@tiptap/extension-text";
 import { HardBreak } from "@tiptap/extension-hard-break";
 import { History } from "@tiptap/extension-history";
+import { Bold } from "@tiptap/extension-bold";
+import { Italic } from "@tiptap/extension-italic";
 import { Link } from "@tiptap/extension-link";
 import { Placeholder } from "@tiptap/extension-placeholder";
 import { Extension, Node, type JSONContent } from "@tiptap/core";
@@ -120,6 +122,38 @@ const HardBreakOnEnter = HardBreak.extend({
   },
 });
 
+const INDENT = "    ";
+
+/** Finds the start of the line containing `from` — the position right
+ * after the nearest preceding hardBreak, or the very start of the body if
+ * there isn't one. The editor has no real paragraph/block structure to
+ * indent (see HardBreakOnEnter above), so "indent this line" has to be
+ * computed this way rather than reached for as a built-in block command. */
+function lineStartPos(doc: PMNode, from: number): number {
+  let start = 1; // position 1: just inside the single wrapping paragraph
+  doc.descendants((node, pos) => {
+    if (node.type.name === "hardBreak" && pos < from) start = pos + node.nodeSize;
+  });
+  return start;
+}
+
+/** Adds one indent level (plain leading spaces — the stored format is
+ * plain text rendered with `white-space:pre-wrap`, so literal spaces at
+ * the start of a line already render correctly with no markup needed). */
+export function indentLine(doc: PMNode, from: number): { pos: number; text: string } {
+  return { pos: lineStartPos(doc, from), text: INDENT };
+}
+
+/** Removes up to one indent level of leading spaces from the current line,
+ * if any is present. Returns null when there's nothing to remove. */
+export function outdentLine(doc: PMNode, from: number): { from: number; to: number } | null {
+  const start = lineStartPos(doc, from);
+  const end = Math.min(start + INDENT.length, doc.content.size);
+  const lineStart = doc.textBetween(start, end);
+  const leading = lineStart.match(/^ +/)?.[0].length ?? 0;
+  return leading > 0 ? { from: start, to: start + leading } : null;
+}
+
 export function makeBodyEditorExtensions(placeholder: string) {
   return [
     Document,
@@ -127,6 +161,8 @@ export function makeBodyEditorExtensions(placeholder: string) {
     Text,
     HardBreakOnEnter,
     History,
+    Bold,
+    Italic,
     Link.configure({ autolink: false, openOnClick: false, linkOnPaste: false }),
     MergeField,
     Spintext,
@@ -134,7 +170,15 @@ export function makeBodyEditorExtensions(placeholder: string) {
   ];
 }
 
-const TOKEN_RE = /\{\{([^{}]+)\}\}|\[([^\]]+)\]\((https?:\/\/[^\s)]+|mailto:[^\s)]+)\)/g;
+// Order matters: at any run of asterisks, the longest alternative that can
+// actually match wins because each shorter one's `[^*]+` refuses to start on
+// another `*` — a real "**bold**" can never be swallowed by the "*italic*"
+// alternative below it, even though both are tried at the same position.
+// Italic uses `*`, not `_`, specifically to avoid colliding with
+// underscores inside a plain pasted URL (e.g. "foo_bar_baz") — asterisks
+// essentially never appear in real URLs.
+const TOKEN_RE =
+  /\{\{([^{}]+)\}\}|\[([^\]]+)\]\((https?:\/\/[^\s)]+|mailto:[^\s)]+)\)|\*\*\*([^*]+)\*\*\*|\*\*([^*]+)\*\*|\*([^*]+)\*/g;
 
 /** Parses the raw stored template string (with `{{Field}}` / spintext /
  * `[label](url)` syntax) into the editor's initial document. */
@@ -158,6 +202,12 @@ export function rawStringToContent(raw: string): JSONContent {
       content.push({ type: "mergeField", attrs: { field: match[1] } });
     } else if (match[2] !== undefined && match[3] !== undefined) {
       content.push({ type: "text", text: match[2], marks: [{ type: "link", attrs: { href: match[3] } }] });
+    } else if (match[4] !== undefined) {
+      content.push({ type: "text", text: match[4], marks: [{ type: "bold" }, { type: "italic" }] });
+    } else if (match[5] !== undefined) {
+      content.push({ type: "text", text: match[5], marks: [{ type: "bold" }] });
+    } else if (match[6] !== undefined) {
+      content.push({ type: "text", text: match[6], marks: [{ type: "italic" }] });
     }
     lastIndex = TOKEN_RE.lastIndex;
   }
@@ -205,9 +255,22 @@ export function docToRawString(doc: PMNode): string {
         // boundary, so it's caught regardless of how it got there.
         const safeLabel = (node.text ?? "").replace(/\]/g, "");
         result += `[${safeLabel}](${linkMark.attrs.href})`;
-      } else {
-        result += node.text ?? "";
+        return false;
       }
+      // A run of text can carry both marks at once (selecting text and
+      // clicking both Bold and Italic) — that needs its own dedicated
+      // "***text***" token, not two independently-wrapped tokens, since
+      // TOKEN_RE parses each token in a single flat pass and can't
+      // reconstruct nested delimiters like "_**text**_" back into two marks.
+      const hasBold = node.marks.some((m) => m.type.name === "bold");
+      const hasItalic = node.marks.some((m) => m.type.name === "italic");
+      // Any stray "*" typed into the text itself would also break
+      // re-parsing, same reasoning as "]" above for links.
+      const safeText = (node.text ?? "").replace(/\*/g, "");
+      if (hasBold && hasItalic) result += `***${safeText}***`;
+      else if (hasBold) result += `**${safeText}**`;
+      else if (hasItalic) result += `*${safeText}*`;
+      else result += node.text ?? "";
       return false;
     }
     return true;

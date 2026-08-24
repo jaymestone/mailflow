@@ -1,14 +1,27 @@
-/** Escapes text and turns `[label](url)` markdown-lite links (inserted via
- * the step editor's Link button) into real `<a>` tags — the shared core
- * used both for the actual outbound HTML email and for rendering a
- * resolved preview inline in the app's own UI (which supplies its own
- * text styling, unlike the email-specific wrapper below). */
+// Mirrors rich-body-extensions.tsx's TOKEN_RE exactly (link, then
+// bold+italic, bold, italic — longest asterisk run first, since a shorter
+// alternative's `[^*]+` can't start on another `*`). Converting all of them
+// in one combined pass, rather than separate sequential regexes, matters:
+// a link's URL is consumed whole by the link alternative before the
+// bold/italic alternatives ever see it, so a URL containing a stray `*`
+// can't be misread as an emphasis delimiter.
+const MARKDOWN_RE =
+  /\[([^\]]+)\]\((https?:\/\/[^\s)]+|mailto:[^\s)]+)\)|\*\*\*([^*]+)\*\*\*|\*\*([^*]+)\*\*|\*([^*]+)\*/g;
+
+/** Escapes text and converts the step editor's markdown-lite markup
+ * (`[label](url)` links, `**bold**`, `*italic*`, `***bold italic***`) into
+ * real HTML tags — the shared core used both for the actual outbound HTML
+ * email and for rendering a resolved preview inline in the app's own UI
+ * (which supplies its own text styling, unlike the email-specific wrapper
+ * below). */
 export function linkifyMarkdown(text: string): string {
   const escaped = escapeHtml(text);
-  return escaped.replace(
-    /\[([^\]]+)\]\((https?:\/\/[^\s)]+|mailto:[^\s)]+)\)/g,
-    (_match, label: string, url: string) => `<a href="${url}">${label}</a>`,
-  );
+  return escaped.replace(MARKDOWN_RE, (_match, linkLabel, linkUrl, boldItalic, bold, italic) => {
+    if (linkLabel !== undefined) return `<a href="${linkUrl}">${linkLabel}</a>`;
+    if (boldItalic !== undefined) return `<strong><em>${boldItalic}</em></strong>`;
+    if (bold !== undefined) return `<strong>${bold}</strong>`;
+    return `<em>${italic}</em>`;
+  });
 }
 
 /** Wraps a fully-assembled inner HTML string (new content, quote

@@ -10,6 +10,8 @@ import {
   makeBodyEditorExtensions,
   rawStringToContent,
   docToRawString,
+  indentLine,
+  outdentLine,
 } from "./rich-body-extensions";
 
 type Template = {
@@ -244,6 +246,23 @@ function StepForm({
         .setLink({ href: url })
         .run();
     }
+  }
+
+  // Bold/italic/indent have no sensible single-line Subject equivalent (a
+  // subject is never HTML-rendered by any mail client), so unlike merge
+  // fields/spintext/link these always target the body, regardless of which
+  // field was last focused.
+  function indent() {
+    if (!bodyEditor) return;
+    const { pos, text } = indentLine(bodyEditor.state.doc, bodyEditor.state.selection.from);
+    bodyEditor.chain().focus().insertContentAt(pos, text).run();
+  }
+
+  function outdent() {
+    if (!bodyEditor) return;
+    const range = outdentLine(bodyEditor.state.doc, bodyEditor.state.selection.from);
+    if (!range) return;
+    bodyEditor.chain().focus().deleteRange(range).run();
   }
 
   async function save() {
@@ -492,6 +511,39 @@ function StepForm({
             {field}
           </button>
         ))}
+        <span className="mx-0.5 h-3.5 w-px bg-rule" />
+        <button
+          type="button"
+          onClick={() => bodyEditor?.chain().focus().toggleBold().run()}
+          title="Bold (⌘B)"
+          className="rounded-[2px] border border-hairline px-2 py-1 text-[11px] font-bold text-muted-3 hover:border-accent hover:text-accent"
+        >
+          B
+        </button>
+        <button
+          type="button"
+          onClick={() => bodyEditor?.chain().focus().toggleItalic().run()}
+          title="Italic (⌘I)"
+          className="rounded-[2px] border border-hairline px-2 py-1 text-[11px] italic text-muted-3 hover:border-accent hover:text-accent"
+        >
+          I
+        </button>
+        <button
+          type="button"
+          onClick={indent}
+          title="Indent this line"
+          className="rounded-[2px] border border-hairline px-2 py-1 text-[11px] text-muted-3 hover:border-accent hover:text-accent"
+        >
+          Indent
+        </button>
+        <button
+          type="button"
+          onClick={outdent}
+          title="Outdent this line"
+          className="rounded-[2px] border border-hairline px-2 py-1 text-[11px] text-muted-3 hover:border-accent hover:text-accent"
+        >
+          Outdent
+        </button>
         <span className="mx-0.5 h-3.5 w-px bg-rule" />
         <button
           type="button"

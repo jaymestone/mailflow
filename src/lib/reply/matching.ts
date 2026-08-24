@@ -40,10 +40,14 @@ export async function matchInboundMessage(
   // 2. Hidden tracking token embedded in the sent email, echoed back in a reply.
   const tokenMatch = email.bodyText.match(/<!--\s*([a-f0-9]{16})\s*-->/i);
   if (tokenMatch) {
+    // The regex is case-insensitive (a client could plausibly uppercase
+    // quoted text), but stored tokens are always lowercase hex — without
+    // this the captured value would keep its original case and silently
+    // fail to match a real, correctly-generated token.
     const { data } = await supabase
       .from("outbound_sends")
       .select("id, campaign_id, contact_id")
-      .eq("tracking_token", tokenMatch[1])
+      .eq("tracking_token", tokenMatch[1].toLowerCase())
       .maybeSingle();
     if (data) {
       return {

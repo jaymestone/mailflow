@@ -1,7 +1,16 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
-const VALID_CATEGORIES = ["interested", "not_interested", "follow_up", "ooo", "opt_out", "bounce", "unclear"];
+const VALID_CATEGORIES = [
+  "interested",
+  "not_interested",
+  "follow_up",
+  "ooo_temporary",
+  "ooo_departed",
+  "opt_out",
+  "bounce",
+  "unclear",
+];
 
 export async function POST(request: Request) {
   const { id, category } = await request.json();

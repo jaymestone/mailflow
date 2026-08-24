@@ -3,7 +3,16 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
-const CATEGORIES = ["interested", "not_interested", "follow_up", "ooo", "opt_out", "bounce", "unclear"];
+const CATEGORIES = [
+  "interested",
+  "not_interested",
+  "follow_up",
+  "ooo_temporary",
+  "ooo_departed",
+  "opt_out",
+  "bounce",
+  "unclear",
+];
 
 export function PollNowButton() {
   const router = useRouter();
@@ -18,7 +27,9 @@ export function PollNowButton() {
     setBusy(false);
     setResult(
       res.ok
-        ? `Polled ${data.accountsPolled} accounts, ${data.messagesFetched} new messages (${data.replies} replies, ${data.bounces} bounces)`
+        ? `Polled ${data.accountsPolled} accounts, ${data.messagesFetched} new messages (${data.replies} replies, ${data.bounces} bounces` +
+            `${data.suppressed > 0 ? `, ${data.suppressed} suppressed` : ""}` +
+            `${data.pausedElsewhere > 0 ? `, ${data.pausedElsewhere} paused elsewhere` : ""})`
         : "Failed to poll",
     );
     router.refresh();

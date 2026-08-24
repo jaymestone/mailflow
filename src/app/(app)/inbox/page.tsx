@@ -5,11 +5,19 @@ const CATEGORY_TONES: Record<string, string> = {
   interested: "text-success",
   not_interested: "text-faint",
   follow_up: "text-warning",
-  ooo: "text-faint",
+  ooo_temporary: "text-faint",
+  ooo_departed: "text-error",
   opt_out: "text-error",
   bounce: "text-error",
   unclear: "text-muted-2",
 };
+
+// Temporary OOO auto-replies are handled automatically (sequence just
+// pauses and resumes on the contact's return date) — they're excluded from
+// the default "All" view so they don't bury replies that actually need
+// attention. Still fully visible via the "ooo temporary" filter pill, and
+// in a contact's history.
+const AUTO_HANDLED_CATEGORIES = ["ooo_temporary"];
 
 export default async function InboxPage({
   searchParams,
@@ -28,7 +36,11 @@ export default async function InboxPage({
     .order("received_at", { ascending: false })
     .limit(200);
 
-  if (params.category) query = query.eq("classification_category", params.category);
+  if (params.category) {
+    query = query.eq("classification_category", params.category);
+  } else {
+    query = query.not("classification_category", "in", `(${AUTO_HANDLED_CATEGORIES.join(",")})`);
+  }
 
   const { data: messages } = await query;
 

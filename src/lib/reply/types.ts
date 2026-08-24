@@ -2,7 +2,8 @@ export type ReplyCategory =
   | "interested"
   | "not_interested"
   | "follow_up"
-  | "ooo"
+  | "ooo_temporary"
+  | "ooo_departed"
   | "opt_out"
   | "bounce"
   | "unclear";

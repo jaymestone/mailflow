@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-const NOMINATIM_USER_AGENT = "MailFlow-VenueGeocoder/1.0 (+https://mailflow-flame.vercel.app)";
+const NOMINATIM_USER_AGENT = "MailFlow-VenueGeocoder/1.0 (jayme@jaymestone.com)";
 
 export type ResolvedLocation = { lat: number; lng: number } | null;
 

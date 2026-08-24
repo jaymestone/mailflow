@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { randomBytes, randomUUID } from "crypto";
-import { pickNextAccount, type SendAccount } from "./roundRobin";
+import { effectiveCap, pickNextAccount, type SendAccount } from "./roundRobin";
 import { buildFollowUpContent } from "./buildFollowUp";
 import { findUnresolvedTokens, resolveTemplate } from "@/lib/templates/resolve";
 import { wrapEmailHtml } from "@/lib/templates/emailHtml";
@@ -168,22 +168,6 @@ export async function runSendTick(
         continue;
       }
 
-      const picked = pickNextAccount(accounts, cursor, sentCounts, today);
-      if (!picked) {
-        result.skippedNoCapacity++;
-        result.details.push({ email: member.email, outcome: "skipped: all accounts at daily cap" });
-        continue;
-      }
-
-      if (opts.dryRun) {
-        cursor = picked.nextCursor;
-        sentCounts.set(picked.account.id, (sentCounts.get(picked.account.id) ?? 0) + 1);
-        domainsSentThisTick.add(member.recipient_domain);
-        result.sent++;
-        result.details.push({ email: member.email, outcome: "would send", account: picked.account.email_address });
-        continue;
-      }
-
       // Every prior successful send for this member, oldest first.
       // status='sent' excludes failed attempts (a failed attempt followed
       // by a successful retry would otherwise appear twice, in the wrong
@@ -205,6 +189,55 @@ export async function runSendTick(
           continue;
         }
         chain = priorSends ?? [];
+      }
+
+      // A follow-up step always sends from whichever account sent this
+      // member's most recent prior step — never re-picked via round robin
+      // — so a recipient's whole sequence comes from one address and
+      // actually threads together, instead of a different "person"
+      // following up each time. Round robin only spreads first-touch
+      // volume across accounts; only a member's very first step goes
+      // through it.
+      const pinnedAccountId = chain.length > 0 ? chain[chain.length - 1].connected_account_id : null;
+      let picked: { account: SendAccount; nextCursor: number } | null;
+      if (pinnedAccountId) {
+        const pinnedAccount = accounts.find((a) => a.id === pinnedAccountId);
+        if (!pinnedAccount) {
+          result.skippedNoCapacity++;
+          result.details.push({
+            email: member.email,
+            outcome: "skipped: this contact's sending account is no longer active",
+          });
+          continue;
+        }
+        const sentSoFar = sentCounts.get(pinnedAccount.id) ?? 0;
+        if (sentSoFar >= effectiveCap(pinnedAccount, today)) {
+          result.skippedNoCapacity++;
+          result.details.push({
+            email: member.email,
+            outcome: "skipped: this contact's sending account is at its daily cap",
+          });
+          continue;
+        }
+        // Doesn't consume a round-robin turn — that rotation is only for
+        // spreading first-touch volume across accounts.
+        picked = { account: pinnedAccount, nextCursor: cursor };
+      } else {
+        picked = pickNextAccount(accounts, cursor, sentCounts, today);
+        if (!picked) {
+          result.skippedNoCapacity++;
+          result.details.push({ email: member.email, outcome: "skipped: all accounts at daily cap" });
+          continue;
+        }
+      }
+
+      if (opts.dryRun) {
+        cursor = picked.nextCursor;
+        sentCounts.set(picked.account.id, (sentCounts.get(picked.account.id) ?? 0) + 1);
+        domainsSentThisTick.add(member.recipient_domain);
+        result.sent++;
+        result.details.push({ email: member.email, outcome: "would send", account: picked.account.email_address });
+        continue;
       }
 
       // Follow-up steps (2+) default their subject to "Re: [step 1's

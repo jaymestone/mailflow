@@ -3,7 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 const BATCH_SIZE = 20;
 const REQUEST_SPACING_MS = 1100; // Nominatim's usage policy caps at 1 req/sec.
 const MAX_ATTEMPTS = 3;
-const NOMINATIM_USER_AGENT = "MailFlow-VenueGeocoder/1.0 (+https://mailflow-flame.vercel.app)";
+const NOMINATIM_USER_AGENT = "MailFlow-VenueGeocoder/1.0 (jayme@jaymestone.com)";
 
 type GeoLocationRow = {
   id: string;

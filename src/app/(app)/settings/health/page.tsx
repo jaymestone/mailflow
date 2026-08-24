@@ -7,6 +7,10 @@ const EXPECTED_INTERVAL_MINUTES: Record<string, number> = {
   "reply-poll-tick": 5,
 };
 
+function minutesSince(dateStr: string): number {
+  return (Date.now() - new Date(dateStr).getTime()) / 60000;
+}
+
 export default async function HealthPage() {
   const supabase = await createClient();
 
@@ -46,7 +50,7 @@ export default async function HealthPage() {
               {Object.entries(EXPECTED_INTERVAL_MINUTES).map(([job, intervalMin]) => {
                 const row = (cronHealth ?? []).find((h) => h.job_name === job);
                 const lastRun = row ? new Date(row.last_run_at) : null;
-                const minutesAgo = lastRun ? (Date.now() - lastRun.getTime()) / 60000 : null;
+                const minutesAgo = row ? minutesSince(row.last_run_at) : null;
                 const stale = minutesAgo === null || minutesAgo > intervalMin * 3;
                 return (
                   <tr key={job} className="border-b border-hairline-soft">

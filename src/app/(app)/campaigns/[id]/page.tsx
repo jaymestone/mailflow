@@ -15,9 +15,20 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
   const { data: campaign } = await supabase.from("campaigns").select("*").eq("id", id).single();
   if (!campaign) notFound();
 
-  const [{ data: templates }, { data: lists }, { data: members }, { count: memberCount }] = await Promise.all([
+  const [
+    { data: templates },
+    { data: savedTemplates },
+    { data: lists },
+    { data: segments },
+    { data: campaigns },
+    { data: members },
+    { count: memberCount },
+  ] = await Promise.all([
     supabase.from("campaign_templates").select("*").eq("campaign_id", id).order("step_number"),
+    supabase.from("saved_templates").select("id, name, subject, body").order("name"),
     supabase.from("lists").select("id, name").order("name"),
+    supabase.from("saved_segments").select("id, name, saved_segment_contacts(count)").order("name"),
+    supabase.from("campaigns").select("id, name").order("name"),
     supabase
       .from("campaign_members")
       .select("id, current_step, member_status, last_sent_at, contact:contacts(id, first_name, last_name, email, venue)")
@@ -26,6 +37,12 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
       .limit(MEMBERS_DISPLAY_CAP),
     supabase.from("campaign_members").select("id", { count: "exact", head: true }).eq("campaign_id", id),
   ]);
+
+  const segmentOptions = (segments ?? []).map((s) => ({
+    id: s.id,
+    name: s.name,
+    count: Array.isArray(s.saved_segment_contacts) ? (s.saved_segment_contacts[0]?.count ?? 0) : 0,
+  }));
 
   const statusCounts: Record<string, number> = {};
   for (const m of members ?? []) {
@@ -44,7 +61,12 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
             <p className="mt-1.5 font-display text-[15px] italic text-muted-2">{campaign.artists}</p>
           )}
         </div>
-        <StatusControl campaignId={id} status={campaign.status} />
+        <StatusControl
+          campaignId={id}
+          status={campaign.status}
+          memberCount={memberCount ?? 0}
+          hasTestOverride={(templates ?? []).some((t) => t.test_delay_minutes != null)}
+        />
       </div>
 
       <SendControls />
@@ -55,7 +77,7 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
           Spintext <code className="text-ink-soft">{"{a|b}"}</code> and merge fields{" "}
           <code className="text-ink-soft">{"{{First Name}}"}</code> resolve at send time.
         </p>
-        <TemplateEditor campaignId={id} templates={templates ?? []} />
+        <TemplateEditor campaignId={id} templates={templates ?? []} savedTemplates={savedTemplates ?? []} />
       </section>
 
       <section className="mt-11">
@@ -70,7 +92,12 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
           </span>
         </div>
         <div className="mt-4">
-          <RecipientPicker campaignId={id} lists={lists ?? []} />
+          <RecipientPicker
+            campaignId={id}
+            lists={lists ?? []}
+            segments={segmentOptions}
+            campaigns={campaigns ?? []}
+          />
         </div>
 
         <div className="mt-5">

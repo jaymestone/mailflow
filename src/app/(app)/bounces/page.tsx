@@ -12,6 +12,7 @@ export default async function BouncesPage() {
 
   const bounces = (suppressed ?? []).filter((s) => s.reason === "bounce");
   const optOuts = (suppressed ?? []).filter((s) => s.reason === "opt_out");
+  const departed = (suppressed ?? []).filter((s) => s.reason === "departed");
   const manual = (suppressed ?? []).filter((s) => s.reason === "manual");
 
   return (
@@ -22,14 +23,18 @@ export default async function BouncesPage() {
         permanent do-not-contact record and is never re-added by an import.
       </p>
 
-      <div className="mt-7 grid grid-cols-3 gap-5 text-center">
+      <div className="mt-7 grid grid-cols-4 gap-5 text-center">
         <Stat label="Bounced" value={bounces.length} tone="text-error" />
         <Stat label="Opted out" value={optOuts.length} tone="text-warning" />
+        <Stat label="Departed / venue closed" value={departed.length} tone="text-error" />
         <Stat label="Manually suppressed" value={manual.length} />
       </div>
 
       <Table title="Bounced addresses" rows={bounces} />
       <Table title="Opted out" rows={optOuts} />
+      {departed.length > 0 && (
+        <Table title="Departed / venue closed — needs a contact update" rows={departed} />
+      )}
       {manual.length > 0 && <Table title="Manually suppressed" rows={manual} />}
     </div>
   );

@@ -19,6 +19,9 @@ export function SendControls() {
   const [result, setResult] = useState<SendResult | null>(null);
 
   async function run(dryRun: boolean) {
+    if (!dryRun && !confirm("Send now? This processes every due campaign account-wide and sends real email.")) {
+      return;
+    }
     setBusy(dryRun ? "dry" : "live");
     setResult(null);
     const res = await fetch("/api/send/tick", {

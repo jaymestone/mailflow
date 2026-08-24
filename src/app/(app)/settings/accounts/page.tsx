@@ -11,7 +11,7 @@ export default async function AccountsPage({
 
   const { data: accounts } = await supabase
     .from("connected_accounts")
-    .select("id, email_address, can_send, status, last_error, ramp_schedule")
+    .select("id, email_address, display_name, can_send, status, last_error, ramp_schedule")
     .order("email_address");
 
   const { data: replyToSetting } = await supabase

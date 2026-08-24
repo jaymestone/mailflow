@@ -6,6 +6,7 @@ import { useState } from "react";
 type Account = {
   id: string;
   email_address: string;
+  display_name: string | null;
   can_send: boolean;
   status: string;
   last_error: string | null;
@@ -63,13 +64,35 @@ export function AccountRow({ account, isReplyTo }: { account: Account; isReplyTo
     router.refresh();
   }
 
+  async function editDisplayName() {
+    const name = prompt(
+      "Display name shown in quoted replies (e.g. \"Jayme Stone\") — leave blank to just show the email address:",
+      account.display_name ?? "",
+    );
+    if (name === null) return;
+    setBusy("name");
+    await fetch("/api/accounts/update", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: account.id, display_name: name }),
+    });
+    setBusy(null);
+    router.refresh();
+  }
+
   const statusTone = account.status === "active" ? "text-success" : account.status === "error" ? "text-error" : "text-faint";
 
   return (
     <div className="flex items-center justify-between rounded-[3px] border border-hairline bg-surface px-[22px] py-5">
       <div>
         <div className="flex items-center gap-2.5">
-          <span className="font-display text-[17px] text-ink">{account.email_address}</span>
+          <span className="font-display text-[17px] text-ink">
+            {account.display_name ? `${account.display_name} ` : ""}
+            <span className={account.display_name ? "text-muted-3" : ""}>{account.email_address}</span>
+          </span>
+          <button onClick={editDisplayName} disabled={busy !== null} className="text-[11px] text-muted-3 hover:text-accent">
+            {account.display_name ? "Edit name" : "+ Add display name"}
+          </button>
           {isReplyTo && (
             <span className="rounded-full bg-accent-bg px-2 py-0.5 text-[10px] tracking-wide text-accent uppercase">
               Reply-to

@@ -14,7 +14,10 @@ export function DeliverabilityCheck({ domains }: { domains: string[] }) {
 
   useEffect(() => {
     if (domains.length === 0) {
-      setLoading(false);
+      // Deferred to a microtask so this setState lands outside the effect's
+      // own synchronous commit, same fix as the venues-page mount effect
+      // earlier this session.
+      queueMicrotask(() => setLoading(false));
       return;
     }
     Promise.all(

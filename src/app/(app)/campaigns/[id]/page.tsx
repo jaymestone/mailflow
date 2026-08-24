@@ -2,7 +2,7 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { TemplateEditor } from "./template-editor";
-import { StatusControl, RemoveMemberButton } from "./campaign-controls";
+import { StatusControl, ArchiveDeleteControls, RemoveMemberButton } from "./campaign-controls";
 import { RecipientPicker } from "./recipient-picker";
 import { SendControls } from "./send-controls";
 
@@ -60,13 +60,22 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
           {campaign.artists && (
             <p className="mt-1.5 font-display text-[15px] italic text-muted-2">{campaign.artists}</p>
           )}
+          {campaign.archived_at && <p className="mt-1.5 text-xs text-faint-2">Archived</p>}
         </div>
-        <StatusControl
-          campaignId={id}
-          status={campaign.status}
-          memberCount={memberCount ?? 0}
-          hasTestOverride={(templates ?? []).some((t) => t.test_delay_minutes != null)}
-        />
+        <div className="flex items-center gap-4">
+          <StatusControl
+            campaignId={id}
+            status={campaign.status}
+            memberCount={memberCount ?? 0}
+            hasTestOverride={(templates ?? []).some((t) => t.test_delay_minutes != null)}
+          />
+          <ArchiveDeleteControls
+            campaignId={id}
+            campaignName={campaign.name}
+            archived={Boolean(campaign.archived_at)}
+            memberCount={memberCount ?? 0}
+          />
+        </div>
       </div>
 
       <SendControls />

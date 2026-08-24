@@ -1,24 +1,36 @@
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 
-export default async function CampaignsPage() {
+export default async function CampaignsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ archived?: string }>;
+}) {
+  const { archived: showArchived } = await searchParams;
   const supabase = await createClient();
 
-  const { data: campaigns } = await supabase
+  let query = supabase
     .from("campaigns")
-    .select("id, name, artists, status, created_at, campaign_members(count)")
+    .select("id, name, artists, status, archived_at, created_at, campaign_members(count)")
     .order("created_at", { ascending: false });
+  query = showArchived ? query.not("archived_at", "is", null) : query.is("archived_at", null);
+  const { data: campaigns } = await query;
 
   return (
     <div>
       <div className="flex items-baseline justify-between">
         <h1 className="font-display text-[32px] font-medium text-ink">Campaigns</h1>
-        <Link
-          href="/campaigns/new"
-          className="rounded-[2px] bg-ink px-[18px] py-2.5 text-xs font-semibold text-surface no-underline"
-        >
-          New campaign
-        </Link>
+        <div className="flex items-center gap-4">
+          <Link href={showArchived ? "/campaigns" : "/campaigns?archived=1"} className="text-xs text-muted-3 hover:text-accent">
+            {showArchived ? "Show active" : "Show archived"}
+          </Link>
+          <Link
+            href="/campaigns/new"
+            className="rounded-[2px] bg-ink px-[18px] py-2.5 text-xs font-semibold text-surface no-underline"
+          >
+            New campaign
+          </Link>
+        </div>
       </div>
 
       <div className="mt-7">
@@ -41,7 +53,9 @@ export default async function CampaignsPage() {
           </Link>
         ))}
         {(campaigns ?? []).length === 0 && (
-          <div className="py-8 text-center text-sm text-muted-3">No campaigns yet.</div>
+          <div className="py-8 text-center text-sm text-muted-3">
+            {showArchived ? "No archived campaigns." : "No campaigns yet."}
+          </div>
         )}
       </div>
     </div>

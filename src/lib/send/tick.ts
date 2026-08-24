@@ -1,7 +1,9 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { randomBytes, randomUUID } from "crypto";
 import { pickNextAccount, type SendAccount } from "./roundRobin";
+import { buildFollowUpContent } from "./buildFollowUp";
 import { findUnresolvedTokens, resolveTemplate } from "@/lib/templates/resolve";
+import { wrapEmailHtml } from "@/lib/templates/emailHtml";
 import { getAccessToken, sendGmailMessage } from "@/lib/gmail/client";
 
 const DEFAULT_BATCH_LIMIT = 100;
@@ -31,6 +33,7 @@ export type SendTickResult = {
   skippedNoCapacity: number;
   skippedDomainCap: number;
   skippedUnresolvedTemplate: number;
+  skippedQueryError: number;
   details: { email: string; outcome: string; account?: string }[];
 };
 
@@ -55,6 +58,18 @@ function isWithinSendWindow(sendWindow: {
   return hour >= sendWindow.start_hour && hour < sendWindow.end_hour;
 }
 
+function fetchPriorSends(supabase: SupabaseClient, member: DueMember) {
+  return supabase
+    .from("outbound_sends")
+    .select(
+      "step_number, subject_resolved, body_resolved, sent_at, rfc_message_id, gmail_thread_id, connected_account_id, connected_account:connected_accounts(email_address, display_name)",
+    )
+    .eq("campaign_member_id", member.campaign_member_id)
+    .eq("status", "sent")
+    .lt("step_number", member.next_step)
+    .order("step_number", { ascending: true });
+}
+
 export async function runSendTick(
   supabase: SupabaseClient,
   opts: { dryRun?: boolean; ignoreSendWindow?: boolean } = {},
@@ -66,6 +81,7 @@ export async function runSendTick(
     skippedNoCapacity: 0,
     skippedDomainCap: 0,
     skippedUnresolvedTemplate: 0,
+    skippedQueryError: 0,
     details: [],
   };
 
@@ -168,17 +184,68 @@ export async function runSendTick(
         continue;
       }
 
+      // Every prior successful send for this member, oldest first.
+      // status='sent' excludes failed attempts (a failed attempt followed
+      // by a successful retry would otherwise appear twice, in the wrong
+      // relative order for a chain that's supposed to be oldest-to-newest).
+      // Only needed for follow-up steps, but harmless (empty) for step 1.
+      let chain: NonNullable<Awaited<ReturnType<typeof fetchPriorSends>>["data"]> = [];
+      if (member.next_step > 1) {
+        const { data: priorSends, error: priorSendsError } = await fetchPriorSends(supabase, member);
+
+        // A transient failure here must not fall through to sending with a
+        // blank subject and no reply threading — skip this member for this
+        // tick and retry next time rather than send something broken.
+        if (priorSendsError) {
+          result.skippedQueryError++;
+          result.details.push({
+            email: member.email,
+            outcome: `skipped: could not load prior sends (${priorSendsError.message})`,
+          });
+          continue;
+        }
+        chain = priorSends ?? [];
+      }
+
+      // Follow-up steps (2+) default their subject to "Re: [step 1's
+      // subject]" when left blank, and always get step 1's original email
+      // quoted underneath — always step 1 specifically, never the
+      // immediately preceding step, so a long-running sequence doesn't
+      // pile up nested quotes. References is still the full, RFC
+      // 5322-correct ancestor chain regardless of which step is shown.
+      const { finalSubject, finalBody, htmlInner, inReplyTo, references, threadId } = buildFollowUpContent({
+        subject,
+        body,
+        nextStep: member.next_step,
+        chain,
+        currentAccountId: picked.account.id,
+        timezone: settings.send_window?.timezone,
+      });
+
       const trackingToken = randomBytes(8).toString("hex");
       const rfcMessageId = `<${randomUUID()}@${picked.account.email_address.split("@")[1]}>`;
+      const finalHtml = wrapEmailHtml(htmlInner);
 
       try {
         const accessToken = await getAccessToken(supabase, picked.account.id);
         const sendResult = await sendGmailMessage(accessToken, {
           from: picked.account.email_address,
           to: member.email,
-          subject,
-          body: `${body}\n\n<!-- ${trackingToken} -->`,
+          subject: finalSubject,
+          // The tracking token is a fallback for matching a reply back to
+          // this send (see matching.ts tier 2) when a client doesn't echo
+          // Message-ID/In-Reply-To. It lives ONLY inside a real HTML
+          // comment, which is genuinely invisible in any HTML-rendering
+          // client — never in the plain-text part, where there's no such
+          // thing as an invisible comment and it would show as literal,
+          // suspicious-looking text to the recipient.
+          body: finalBody,
+          html: `${finalHtml}\n<!-- ${trackingToken} -->`,
           replyTo: replyToEmail,
+          messageId: rfcMessageId,
+          inReplyTo,
+          references,
+          threadId,
         });
 
         await supabase.from("outbound_sends").insert({
@@ -187,8 +254,8 @@ export async function runSendTick(
           contact_id: member.contact_id,
           step_number: member.next_step,
           connected_account_id: picked.account.id,
-          subject_resolved: subject,
-          body_resolved: body,
+          subject_resolved: finalSubject,
+          body_resolved: finalBody,
           gmail_message_id: sendResult.id,
           rfc_message_id: rfcMessageId,
           gmail_thread_id: sendResult.threadId,
@@ -231,8 +298,8 @@ export async function runSendTick(
           contact_id: member.contact_id,
           step_number: member.next_step,
           connected_account_id: picked.account.id,
-          subject_resolved: subject,
-          body_resolved: body,
+          subject_resolved: finalSubject,
+          body_resolved: finalBody,
           rfc_message_id: rfcMessageId,
           tracking_token: trackingToken,
           status: "failed",

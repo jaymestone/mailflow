@@ -39,6 +39,10 @@ export async function GET(request: Request) {
       .upsert(
         {
           email_address: email,
+          // Every sending account is the same person regardless of which
+          // address actually sends — used as the "Name <email>" attribution
+          // on quoted replies (see formatQuoteAttribution).
+          display_name: "Jayme Stone",
           scopes: GMAIL_OAUTH_SCOPES,
           status: "active",
           last_error: null,

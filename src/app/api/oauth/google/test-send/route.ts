@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -27,6 +28,7 @@ export async function POST(request: Request) {
       to: account.email_address,
       subject: "MailFlow test send",
       body: `This confirms ${account.email_address} can send through MailFlow via Gmail API.`,
+      messageId: `<${randomUUID()}@${account.email_address.split("@")[1]}>`,
     });
     await supabase.from("connected_accounts").update({ status: "active", last_error: null }).eq("id", accountId);
     return NextResponse.json({ ok: true, messageId: result.id });

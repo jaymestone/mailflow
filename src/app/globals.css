@@ -101,3 +101,21 @@ h3 {
 p {
   text-wrap: pretty;
 }
+
+/* Step editor's rich body field (TipTap/ProseMirror) */
+.ProseMirror {
+  outline: none;
+}
+
+.ProseMirror p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
+  color: var(--color-faint-3);
+}
+
+.ProseMirror a {
+  color: var(--color-accent);
+  text-decoration: underline;
+}

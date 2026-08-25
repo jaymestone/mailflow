@@ -1,5 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
-import { AccountRow } from "./accounts-client";
+import { AccountRow, SendWindowEditor } from "./accounts-client";
 
 export default async function AccountsPage({
   searchParams,
@@ -20,6 +20,18 @@ export default async function AccountsPage({
     .eq("key", "reply_to_account_id")
     .single();
   const replyToAccountId = replyToSetting?.value ?? null;
+
+  const { data: sendWindowSetting } = await supabase
+    .from("app_settings")
+    .select("value")
+    .eq("key", "send_window")
+    .single();
+  const sendWindow = sendWindowSetting?.value ?? {
+    days: ["mon", "tue", "wed", "thu", "fri"],
+    start_hour: 9,
+    end_hour: 17,
+    timezone: "America/Denver",
+  };
 
   return (
     <div>
@@ -47,7 +59,11 @@ export default async function AccountsPage({
         Connect Gmail account
       </a>
 
-      <div className="mt-7 flex flex-col gap-3.5">
+      <div className="mt-7">
+        <SendWindowEditor sendWindow={sendWindow} />
+      </div>
+
+      <div className="mt-3.5 flex flex-col gap-3.5">
         {(accounts ?? []).map((a) => (
           <AccountRow key={a.id} account={a} isReplyTo={a.id === replyToAccountId} />
         ))}

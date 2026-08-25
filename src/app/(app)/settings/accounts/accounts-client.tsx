@@ -64,6 +64,42 @@ export function AccountRow({ account, isReplyTo }: { account: Account; isReplyTo
     router.refresh();
   }
 
+  async function editRampSchedule() {
+    const current = account.ramp_schedule.map((r) => `${r.after_days}:${r.cap}`).join(", ");
+    const raw = prompt(
+      'Ramp schedule as "days after start:daily cap" pairs, e.g. "0:40, 3:75, 7:120, 14:150" — the cap in effect is whichever tier\'s day threshold has been reached:',
+      current,
+    );
+    if (raw === null) return;
+
+    const parsed = raw
+      .split(",")
+      .map((pair) => pair.trim())
+      .filter(Boolean)
+      .map((pair) => {
+        const [days, cap] = pair.split(":").map((n) => parseInt(n.trim(), 10));
+        return { after_days: days, cap };
+      });
+
+    if (
+      parsed.length === 0 ||
+      parsed.some((r) => !Number.isFinite(r.after_days) || !Number.isFinite(r.cap) || r.after_days < 0 || r.cap < 0)
+    ) {
+      alert('Couldn\'t parse that — use "days:cap" pairs separated by commas, e.g. "0:40, 3:75".');
+      return;
+    }
+    parsed.sort((a, b) => a.after_days - b.after_days);
+
+    setBusy("ramp");
+    await fetch("/api/accounts/update", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: account.id, ramp_schedule: parsed }),
+    });
+    setBusy(null);
+    router.refresh();
+  }
+
   async function editDisplayName() {
     const name = prompt(
       "Display name shown in quoted replies (e.g. \"Jayme Stone\") — leave blank to just show the email address:",
@@ -100,7 +136,10 @@ export function AccountRow({ account, isReplyTo }: { account: Account; isReplyTo
           )}
         </div>
         <div className="mt-1.5 text-xs text-muted-3" title={account.last_error ?? ""}>
-          <span className={statusTone}>&#9679; {account.status}</span> · {account.ramp_schedule.map((r) => r.cap).join(" → ")}/day
+          <span className={statusTone}>&#9679; {account.status}</span> · {account.ramp_schedule.map((r) => r.cap).join(" → ")}/day{" "}
+          <button onClick={editRampSchedule} disabled={busy !== null} className="text-[11px] text-muted-3 hover:text-accent">
+            Edit
+          </button>
           <label className="ml-3 inline-flex items-center gap-1.5 text-muted-3">
             <input type="checkbox" checked={account.can_send} onChange={toggleCanSend} disabled={busy === "toggle"} />
             Can send

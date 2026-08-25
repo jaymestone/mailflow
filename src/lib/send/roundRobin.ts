@@ -3,6 +3,7 @@ export type RampTier = { after_days: number; cap: number };
 export type SendAccount = {
   id: string;
   email_address: string;
+  display_name: string | null;
   ramp_schedule: RampTier[];
   ramp_started_at: string; // date
 };

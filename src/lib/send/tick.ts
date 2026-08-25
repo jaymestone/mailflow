@@ -4,7 +4,7 @@ import { effectiveCap, pickNextAccount, type SendAccount } from "./roundRobin";
 import { buildFollowUpContent } from "./buildFollowUp";
 import { findUnresolvedTokens, resolveTemplate } from "@/lib/templates/resolve";
 import { wrapEmailHtml } from "@/lib/templates/emailHtml";
-import { getAccessToken, sendGmailMessage } from "@/lib/gmail/client";
+import { formatFromAddress, getAccessToken, sendGmailMessage } from "@/lib/gmail/client";
 
 const DEFAULT_BATCH_LIMIT = 100;
 
@@ -118,7 +118,7 @@ export async function runSendTick(
 
     const { data: accountRows } = await supabase
       .from("connected_accounts")
-      .select("id, email_address, ramp_schedule, ramp_started_at")
+      .select("id, email_address, display_name, ramp_schedule, ramp_started_at")
       .eq("can_send", true)
       .eq("status", "active");
     const accounts: SendAccount[] = accountRows ?? [];
@@ -262,7 +262,7 @@ export async function runSendTick(
       try {
         const accessToken = await getAccessToken(supabase, picked.account.id);
         const sendResult = await sendGmailMessage(accessToken, {
-          from: picked.account.email_address,
+          from: formatFromAddress(picked.account.display_name, picked.account.email_address),
           to: member.email,
           subject: finalSubject,
           // The tracking token is a fallback for matching a reply back to

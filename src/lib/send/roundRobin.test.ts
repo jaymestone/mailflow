@@ -9,7 +9,7 @@ const RAMP = [
 ];
 
 function account(id: string, rampStartedAt: string, ramp = RAMP): SendAccount {
-  return { id, email_address: `${id}@example.com`, ramp_schedule: ramp, ramp_started_at: rampStartedAt };
+  return { id, email_address: `${id}@example.com`, display_name: null, ramp_schedule: ramp, ramp_started_at: rampStartedAt };
 }
 
 describe("effectiveCap", () => {

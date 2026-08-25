@@ -45,7 +45,7 @@ function mockSupabase(tables: Record<string, unknown>, rpcs: Record<string, unkn
 const RAMP = [{ after_days: 0, cap: 40 }];
 
 function account(id: string) {
-  return { id, email_address: `${id}@example.com`, ramp_schedule: RAMP, ramp_started_at: "2020-01-01" };
+  return { id, email_address: `${id}@example.com`, display_name: null, ramp_schedule: RAMP, ramp_started_at: "2020-01-01" };
 }
 
 function dueMember(overrides: Partial<Record<string, unknown>> = {}) {

@@ -25,13 +25,21 @@ export function linkifyMarkdown(text: string): string {
 }
 
 /** Wraps a fully-assembled inner HTML string (new content, quote
- * attribution, and quoted blockquote all included) in the one font/size
+ * attribution, and quoted blockquote all included) in the one styling
  * declaration for the whole email. Everything must go inside a single call
  * to this — wrapping pieces separately leaves the unwrapped parts to fall
- * back to whatever default font size the recipient's client uses, which
- * doesn't match the declared 14px and reads as visibly inconsistent. */
+ * back to a different default than the wrapped ones, reading as visibly
+ * inconsistent.
+ *
+ * No explicit font-size on purpose: a hardcoded size (14px was tried
+ * first) reads noticeably larger than a real person's default compose
+ * font in most clients and, more importantly, is exactly the kind of
+ * "designed" look that signals a templated/automated send rather than
+ * something someone actually typed. Leaving it unset lets the size
+ * inherit the recipient's own client default, the way a genuine plain
+ * email does. */
 export function wrapEmailHtml(innerHtml: string): string {
-  return `<div style="white-space:pre-wrap;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;color:#000000;">${innerHtml}</div>`;
+  return `<div style="white-space:pre-wrap;font-family:Arial,Helvetica,sans-serif;line-height:1.5;color:#000000;">${innerHtml}</div>`;
 }
 
 /** Convenience for the simple case (no quote block involved): escapes,

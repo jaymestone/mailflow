@@ -50,6 +50,17 @@ function sanitizeHeaderValue(value: string): string {
   return value.replace(/[\r\n]+/g, " ").trim();
 }
 
+/** Formats a From/Reply-To style address as `"Display Name" <email>` so
+ * recipients see a real name instead of a bare address — without a
+ * display name, a bare `From: j@x.com` header shows just the address (or
+ * whatever generic label the recipient's client falls back to), never the
+ * account's actual name. A literal `"` in the name would prematurely close
+ * the quoted-string per RFC 5322, so it's escaped rather than stripped. */
+export function formatFromAddress(displayName: string | null, email: string): string {
+  if (!displayName?.trim()) return email;
+  return `"${displayName.trim().replace(/"/g, '\\"')}" <${email}>`;
+}
+
 function buildRawMessage(opts: SendMessageOpts) {
   const baseHeaders = [
     `From: ${sanitizeHeaderValue(opts.from)}`,

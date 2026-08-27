@@ -2,9 +2,11 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { getAccessToken } from "@/lib/gmail/client";
 import { getCurrentHistoryId, listNewMessageIds } from "@/lib/gmail/history";
 import { fetchGmailMessage } from "@/lib/gmail/messages";
+import { applyGmailLabel, CATEGORY_LABEL_NAMES, getOrCreateLabelId } from "@/lib/gmail/labels";
 import { isBounceMessage } from "./bounceDetection";
 import { matchInboundMessage } from "./matching";
 import { classifyReply } from "./classify";
+import type { ReplyCategory } from "./types";
 
 const DEFAULT_OOO_SNOOZE_DAYS = 7;
 
@@ -49,6 +51,10 @@ export async function runReplyPollTick(supabase: SupabaseClient): Promise<ReplyT
     .select("id, email_address, last_history_id")
     .eq("status", "active");
 
+  // Shared across the whole tick so each account's Gmail labels are listed
+  // at most once, not once per message — see getOrCreateLabelId.
+  const labelCache = new Map<string, string>();
+
   for (const account of accounts ?? []) {
     result.accountsPolled++;
     try {
@@ -89,7 +95,7 @@ export async function runReplyPollTick(supabase: SupabaseClient): Promise<ReplyT
           const bounce = isBounceMessage(email);
           const match = await matchInboundMessage(supabase, email);
 
-          let category: string;
+          let category: ReplyCategory;
           let oooReturnDate: string | null = null;
           if (bounce) {
             category = "bounce";
@@ -168,6 +174,14 @@ export async function runReplyPollTick(supabase: SupabaseClient): Promise<ReplyT
               .eq("contact_id", match.contactId)
               .eq("member_status", "active");
           }
+
+          // Applied last and after every DB side effect above has already
+          // succeeded — replies are actually read in Gmail, not this app,
+          // so a labeling failure (e.g. a transient Gmail API error) must
+          // never undo or block classification, matching, suppression, or
+          // pausing, which already happened by this point.
+          const labelId = await getOrCreateLabelId(accessToken, account.id, CATEGORY_LABEL_NAMES[category], labelCache);
+          await applyGmailLabel(accessToken, email.gmailMessageId, labelId);
         } catch (err) {
           const message = err instanceof Error ? err.message : "Unknown error";
           result.errors.push({ account: `${account.email_address} (message ${messageId})`, error: message });

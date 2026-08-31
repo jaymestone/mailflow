@@ -39,13 +39,16 @@ export function VenuesClient({
   lists,
   segments: initialSegments,
   campaigns,
+  initialFilters,
 }: {
   lists: { id: string; name: string }[];
   segments: SegmentOption[];
   campaigns: { id: string; name: string }[];
+  initialFilters?: Partial<ContactFilters>;
 }) {
   const router = useRouter();
-  const [filters, setFilters] = useState<ContactFilters>(EMPTY_CONTACT_FILTERS);
+  const startingFilters = { ...EMPTY_CONTACT_FILTERS, ...initialFilters };
+  const [filters, setFilters] = useState<ContactFilters>(startingFilters);
   const [searching, setSearching] = useState(false);
   const [results, setResults] = useState<SearchResponse | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -76,11 +79,14 @@ export function VenuesClient({
   }
 
   // Load the full contact book on first visit, matching the page's previous
-  // default-browse behavior, before any filter has been applied. Deferred to
-  // a microtask so the resulting setState calls land outside the effect's
-  // own synchronous commit.
+  // default-browse behavior, before any filter has been applied — unless a
+  // list/segment was pre-selected via a "View contacts" link, in which case
+  // that filter runs immediately instead. Deferred to a microtask so the
+  // resulting setState calls land outside the effect's own synchronous
+  // commit.
   useEffect(() => {
-    queueMicrotask(() => runSearch(EMPTY_CONTACT_FILTERS));
+    queueMicrotask(() => runSearch(startingFilters));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function setField(key: keyof ContactFilters, value: string) {

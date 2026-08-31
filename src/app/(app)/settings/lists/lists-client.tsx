@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
@@ -100,6 +101,9 @@ export function ListsSegmentsClient({ lists, segments }: { lists: NamedCount[]; 
                 {list.name} <span className="text-xs text-muted-3">· {list.count} contacts</span>
               </div>
               <div className="flex items-center gap-2.5">
+                <Link href={`/venues?list=${list.id}`} className="text-xs text-muted-3 hover:text-accent">
+                  View contacts
+                </Link>
                 {lists.length > 1 && (
                   <>
                     <select
@@ -158,6 +162,9 @@ export function ListsSegmentsClient({ lists, segments }: { lists: NamedCount[]; 
                 {segment.name} <span className="text-xs text-muted-3">· {segment.count} contacts</span>
               </div>
               <div className="flex items-center gap-2.5">
+                <Link href={`/venues?segment=${segment.id}`} className="text-xs text-muted-3 hover:text-accent">
+                  View contacts
+                </Link>
                 <button
                   onClick={() => renameSegment(segment)}
                   disabled={busy !== null}

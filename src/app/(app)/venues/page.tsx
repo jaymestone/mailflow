@@ -1,7 +1,12 @@
 import { createClient } from "@/lib/supabase/server";
 import { VenuesClient } from "./venues-client";
 
-export default async function VenuesPage() {
+export default async function VenuesPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ list?: string; segment?: string }>;
+}) {
+  const { list, segment } = await searchParams;
   const supabase = await createClient();
 
   const [{ data: lists }, { data: segments }, { data: campaigns }] = await Promise.all([
@@ -25,7 +30,12 @@ export default async function VenuesPage() {
       </p>
 
       <div className="mt-7">
-        <VenuesClient lists={lists ?? []} segments={segmentOptions} campaigns={campaigns ?? []} />
+        <VenuesClient
+          lists={lists ?? []}
+          segments={segmentOptions}
+          campaigns={campaigns ?? []}
+          initialFilters={{ list: list ?? "", segment: segment ?? "" }}
+        />
       </div>
     </div>
   );

@@ -8,6 +8,7 @@ const NAV_ITEMS = [
   { href: "/campaigns", label: "Campaigns" },
   { href: "/inbox", label: "Inbox" },
   { href: "/bounces", label: "Bounces" },
+  { href: "/settings/lists", label: "Lists" },
   { href: "/settings/accounts", label: "Accounts" },
   { href: "/settings/import", label: "Import" },
   { href: "/settings/geocoding", label: "Geocoding" },

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   ContactFilterFields,
@@ -53,6 +54,9 @@ export function VenuesClient({
   const [targetCampaign, setTargetCampaign] = useState("");
   const [adding, setAdding] = useState(false);
   const [addResult, setAddResult] = useState<{ added: number; skippedSuppressed: number } | null>(null);
+  const [targetList, setTargetList] = useState("");
+  const [moving, setMoving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   async function runSearch(f: ContactFilters) {
     setSearching(true);
@@ -140,6 +144,37 @@ export function VenuesClient({
     }
   }
 
+  async function moveToList() {
+    if (selected.size === 0 || !targetList) return;
+    if (!confirm(`Move ${selected.size} contact${selected.size === 1 ? "" : "s"} to this list?`)) return;
+    setMoving(true);
+    await fetch("/api/contacts/bulk", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "move", contactIds: [...selected], listId: targetList }),
+    });
+    setMoving(false);
+    runSearch(filters);
+  }
+
+  async function deleteSelected() {
+    if (selected.size === 0) return;
+    if (
+      !confirm(
+        `Permanently delete ${selected.size} contact${selected.size === 1 ? "" : "s"}? This removes their entire send/reply history too. This can't be undone.`,
+      )
+    )
+      return;
+    setDeleting(true);
+    await fetch("/api/contacts/bulk", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "delete", contactIds: [...selected] }),
+    });
+    setDeleting(false);
+    runSearch(filters);
+  }
+
   const selectableCount = results ? results.rows.filter((r) => !r.suppressed).length : 0;
 
   return (
@@ -204,7 +239,9 @@ export function VenuesClient({
                         />
                       </td>
                       <td className="px-3 py-2 font-display text-[13px] text-ink">
-                        {r.venue ?? "—"}
+                        <Link href={`/venues/${r.id}`} className="text-ink hover:text-accent hover:underline">
+                          {r.venue ?? r.email}
+                        </Link>
                         {r.suppressed && <span className="ml-1.5 text-[10px] text-error">suppressed</span>}
                       </td>
                       <td className="px-3 py-2 text-muted-2">{r.venue_type ?? "—"}</td>
@@ -255,6 +292,36 @@ export function VenuesClient({
                 className="rounded-[2px] bg-ink px-3.5 py-2 text-xs font-semibold text-surface disabled:opacity-50"
               >
                 {adding ? "Adding…" : `Add ${selected.size} to campaign`}
+              </button>
+
+              <span className="mx-1 h-4 w-px bg-rule" />
+
+              <select
+                value={targetList}
+                onChange={(e) => setTargetList(e.target.value)}
+                className="border-0 border-b border-rule bg-transparent px-0.5 py-2 text-xs text-ink outline-none"
+              >
+                <option value="">Move to list…</option>
+                {lists.map((l) => (
+                  <option key={l.id} value={l.id}>
+                    {l.name}
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={moveToList}
+                disabled={moving || selected.size === 0 || !targetList}
+                className="rounded-[2px] border border-hairline px-3.5 py-2 text-xs text-muted-3 hover:border-accent hover:text-accent disabled:opacity-50"
+              >
+                {moving ? "Moving…" : `Move ${selected.size}`}
+              </button>
+
+              <button
+                onClick={deleteSelected}
+                disabled={deleting || selected.size === 0}
+                className="rounded-[2px] border border-error/40 px-3.5 py-2 text-xs text-error disabled:opacity-50"
+              >
+                {deleting ? "Deleting…" : `Delete ${selected.size}`}
               </button>
             </div>
           )}

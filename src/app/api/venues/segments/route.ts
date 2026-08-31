@@ -57,6 +57,21 @@ export async function POST(request: Request) {
   return NextResponse.json({ segment: { id: segment.id, name: segment.name, count: contactIds.length } });
 }
 
+export async function PATCH(request: Request) {
+  const { id, name } = await request.json();
+  if (!id || !name?.trim()) return NextResponse.json({ error: "id and name required" }, { status: 400 });
+
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("saved_segments")
+    .update({ name: name.trim() })
+    .eq("id", id)
+    .select()
+    .single();
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  return NextResponse.json({ segment: data });
+}
+
 export async function DELETE(request: Request) {
   const { id } = await request.json();
   if (!id) return NextResponse.json({ error: "id required" }, { status: 400 });

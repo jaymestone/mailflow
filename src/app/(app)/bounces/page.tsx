@@ -1,5 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
-import { RestoreButton } from "./bounces-client";
+import { AddSuppressionForm, RestoreButton } from "./bounces-client";
 
 export default async function BouncesPage() {
   const supabase = await createClient();
@@ -29,6 +29,8 @@ export default async function BouncesPage() {
         <Stat label="Departed / venue closed" value={departed.length} tone="text-error" />
         <Stat label="Manually suppressed" value={manual.length} />
       </div>
+
+      <AddSuppressionForm />
 
       <Table title="Bounced addresses" rows={bounces} />
       <Table title="Opted out" rows={optOuts} />

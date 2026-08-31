@@ -7,6 +7,7 @@ type ImportResult = {
   total: number;
   inserted: number;
   skipped: number;
+  skippedSuppressed: number;
   failed: number;
   errors: { sheet: string; row: number; reason: string }[];
   sheets: { name: string; rows: number }[];
@@ -52,7 +53,8 @@ export function FileImportPanel() {
         Upload a CSV or XLSX. Each sheet tab is matched to a list by name (creating a new list if
         none matches), and rows are read against the 13-column schema: First Name, Last Name,
         Email, Venue, Venue Type, City, State, Country, Notes, Source, Mobile, Phone, Website.
-        Duplicate emails (already in the database or repeated in the file) are skipped.
+        Duplicate emails (already in the database or repeated in the file) are skipped, and so are
+        addresses on the bounce/suppression list — they&apos;re never re-added by an import.
       </p>
 
       <form onSubmit={handleSubmit} className="mt-6 flex items-center gap-3.5">
@@ -76,10 +78,11 @@ export function FileImportPanel() {
 
       {result && (
         <div className="mt-7 rounded-[3px] border border-hairline bg-surface p-5">
-          <div className="grid grid-cols-4 gap-4 text-center">
+          <div className="grid grid-cols-5 gap-4 text-center">
             <Stat label="Total rows" value={result.total} />
             <Stat label="Inserted" value={result.inserted} tone="text-success" />
             <Stat label="Skipped (dupes)" value={result.skipped} tone="text-muted-2" />
+            <Stat label="Skipped (suppressed)" value={result.skippedSuppressed} tone="text-muted-2" />
             <Stat label="Failed" value={result.failed} tone="text-error" />
           </div>
 

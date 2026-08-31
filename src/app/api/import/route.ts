@@ -55,9 +55,16 @@ export async function POST(request: Request) {
   const { data: existingContacts } = await supabase.from("contacts").select("email");
   const seenEmails = new Set((existingContacts ?? []).map((c) => c.email.toLowerCase()));
 
+  // The bounces page promises suppressed addresses are "never re-added by
+  // an import" — this is the actual enforcement of that, checked once per
+  // import rather than per row.
+  const { data: suppressed } = await supabase.from("suppression").select("email");
+  const suppressedEmails = new Set((suppressed ?? []).map((s) => s.email.toLowerCase()));
+
   const errors: { sheet: string; row: number; reason: string }[] = [];
   const staged: StagedContact[] = [];
   let skipped = 0;
+  let skippedSuppressed = 0;
   let failed = 0;
 
   for (const sheet of sheets) {
@@ -88,6 +95,10 @@ export async function POST(request: Request) {
       }
 
       const lowerEmail = email.toLowerCase();
+      if (suppressedEmails.has(lowerEmail)) {
+        skippedSuppressed++;
+        return;
+      }
       if (seenEmails.has(lowerEmail)) {
         skipped++;
         return;
@@ -127,7 +138,7 @@ export async function POST(request: Request) {
     inserted += data?.length ?? 0;
   }
 
-  const processed = inserted + skipped + failed;
+  const processed = inserted + skipped + skippedSuppressed + failed;
 
   await supabase
     .from("import_jobs")
@@ -135,7 +146,10 @@ export async function POST(request: Request) {
       status: "completed",
       processed,
       inserted,
-      skipped,
+      // Suppressed rows are folded into the persisted skip count (the job
+      // log doesn't break the two apart) — the live response below is
+      // what distinguishes them for the UI.
+      skipped: skipped + skippedSuppressed,
       failed,
       errors,
       finished_at: new Date().toISOString(),
@@ -147,6 +161,7 @@ export async function POST(request: Request) {
     total: totalRows,
     inserted,
     skipped,
+    skippedSuppressed,
     failed,
     errors,
     sheets: sheets.map((s) => ({ name: s.sheetName, rows: s.rows.length })),

@@ -86,6 +86,45 @@ export function AddSuppressionForm() {
   );
 }
 
+/** Triggers the same batch the weekly cron runs, on demand — processes up
+ * to 8 pending queue items per call (see replacementTick.ts), so a large
+ * backlog may need a couple of clicks (or just the next scheduled run) to
+ * fully clear. */
+export function RunReplacementResearchButton() {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+
+  async function run() {
+    setBusy(true);
+    setResult(null);
+    const res = await fetch("/api/research/replacement-tick", { method: "POST" });
+    const data = await res.json();
+    setBusy(false);
+    setResult(
+      res.ok
+        ? data.processed === 0
+          ? "Nothing pending."
+          : `Researched ${data.processed} — ${data.replaced} replaced, ${data.noReplacementFound} not found, ${data.skipped} skipped.`
+        : "Failed to run research",
+    );
+    router.refresh();
+  }
+
+  return (
+    <div className="flex shrink-0 flex-col items-end gap-1.5">
+      <button
+        onClick={run}
+        disabled={busy}
+        className="rounded-[2px] bg-ink px-4 py-2.5 text-xs font-semibold text-surface disabled:opacity-50"
+      >
+        {busy ? "Researching…" : "Run research now"}
+      </button>
+      {result && <p className="text-right text-xs text-muted-3">{result}</p>}
+    </div>
+  );
+}
+
 export function RestoreButton({ id }: { id: string }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);

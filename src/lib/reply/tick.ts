@@ -3,7 +3,7 @@ import { getAccessToken } from "@/lib/gmail/client";
 import { getCurrentHistoryId, listNewMessageIds } from "@/lib/gmail/history";
 import { fetchGmailMessage } from "@/lib/gmail/messages";
 import { applyGmailLabel, CATEGORY_LABEL_NAMES, getOrCreateLabelId } from "@/lib/gmail/labels";
-import { isBounceMessage } from "./bounceDetection";
+import { classifyBounce } from "./bounceDetection";
 import { matchInboundMessage } from "./matching";
 import { classifyReply } from "./classify";
 import type { ReplyCategory } from "./types";
@@ -14,9 +14,11 @@ export type ReplyTickResult = {
   accountsPolled: number;
   messagesFetched: number;
   bounces: number;
+  softBounces: number;
   replies: number;
   suppressed: number;
   pausedElsewhere: number;
+  removedForReplacement: number;
   errors: { account: string; error: string }[];
 };
 
@@ -37,9 +39,11 @@ export async function runReplyPollTick(supabase: SupabaseClient): Promise<ReplyT
     accountsPolled: 0,
     messagesFetched: 0,
     bounces: 0,
+    softBounces: 0,
     replies: 0,
     suppressed: 0,
     pausedElsewhere: 0,
+    removedForReplacement: 0,
     errors: [],
   };
 
@@ -92,14 +96,15 @@ export async function runReplyPollTick(supabase: SupabaseClient): Promise<ReplyT
           if (email.labelIds.includes("SENT")) continue; // our own outbound copy
 
           result.messagesFetched++;
-          const bounce = isBounceMessage(email);
+          const bounceInfo = classifyBounce(email);
           const match = await matchInboundMessage(supabase, email);
 
           let category: ReplyCategory;
           let oooReturnDate: string | null = null;
-          if (bounce) {
+          if (bounceInfo.isBounce) {
             category = "bounce";
             result.bounces++;
+            if (!bounceInfo.isHard) result.softBounces++;
           } else {
             const classified = await classifyReply(email.subject, email.bodyText);
             category = classified.category;
@@ -120,13 +125,19 @@ export async function runReplyPollTick(supabase: SupabaseClient): Promise<ReplyT
             matched_contact_id: match.contactId,
             matched_outbound_send_id: match.outboundSendId,
             match_method: match.matchMethod,
-            message_type: bounce ? "bounce" : "reply",
+            message_type: bounceInfo.isBounce ? "bounce" : "reply",
             classification_category: category,
             ooo_return_date: category === "ooo_temporary" ? oooReturnDate : null,
             classified_at: new Date().toISOString(),
           });
 
-          if (category === "bounce" || category === "opt_out" || category === "ooo_departed") {
+          // A bounce only suppresses/deletes when it's confirmed hard (see
+          // bounceDetection.ts) — a soft bounce (mailbox full, greylisted,
+          // temporary server issue) gets recorded and labeled like any other
+          // bounce for visibility, but the address isn't touched, since it
+          // may well still be good on the next attempt.
+          const isHardBounce = category === "bounce" && bounceInfo.isHard;
+          if (isHardBounce || category === "opt_out" || category === "ooo_departed") {
             // suppression.email has an expression unique index (lower(email)), which
             // Supabase's upsert onConflict can't target directly — check-then-insert instead.
             const { data: alreadySuppressed } = await supabase
@@ -173,6 +184,39 @@ export async function runReplyPollTick(supabase: SupabaseClient): Promise<ReplyT
               .update({ resume_at: resolveResumeAt(oooReturnDate) })
               .eq("contact_id", match.contactId)
               .eq("member_status", "active");
+          }
+
+          // A hard bounce means the address is dead (a soft bounce is left
+          // alone entirely — see isHardBounce above); ooo_departed means
+          // that *person* is gone, but the venue itself may still be a real
+          // prospect — either way, suppression already stops this exact
+          // address from ever being recontacted, so keeping the contact
+          // record around serves no purpose. Queue what's known about the
+          // venue first so a later research pass can go find whoever
+          // replaced them, then remove the now-dead contact (cascades to
+          // their campaign_members, outbound_sends, notes, and segment
+          // membership — history for a contact who can never be reached
+          // again isn't useful to keep).
+          if ((isHardBounce || category === "ooo_departed") && match.contactId) {
+            const { data: contact } = await supabase
+              .from("contacts")
+              .select("email, venue, venue_type, city, state, country, list_id")
+              .eq("id", match.contactId)
+              .single();
+            if (contact) {
+              await supabase.from("replacement_queue").insert({
+                venue: contact.venue,
+                venue_type: contact.venue_type,
+                city: contact.city,
+                state: contact.state,
+                country: contact.country,
+                list_id: contact.list_id,
+                removed_contact_email: contact.email,
+                removed_reason: category,
+              });
+              await supabase.from("contacts").delete().eq("id", match.contactId);
+              result.removedForReplacement++;
+            }
           }
 
           // Applied last and after every DB side effect above has already

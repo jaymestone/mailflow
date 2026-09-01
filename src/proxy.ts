@@ -2,8 +2,10 @@ import { createServerClient } from "@supabase/ssr";
 import { type NextRequest, NextResponse } from "next/server";
 
 // /api/cron/* authenticates via a shared secret (checked in the route
-// itself) since cron callers have no user session.
-const PUBLIC_PATHS = ["/login", "/auth/callback", "/api/cron"];
+// itself) since cron callers have no user session. /about is the public
+// page shown to Google's OAuth verification reviewers and anyone else
+// checking what this app is before it's behind a login.
+const PUBLIC_PATHS = ["/login", "/auth/callback", "/api/cron", "/about"];
 
 export async function proxy(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request });

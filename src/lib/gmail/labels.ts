@@ -1,18 +1,20 @@
 import type { ReplyCategory } from "@/lib/reply/types";
 
-/** Grouped under a "Mailflow/" parent so Gmail nests them together in the
- * label sidebar, distinct from any of the user's own labels. Applied
- * directly in Gmail (not just shown inside Mailflow's own Inbox page) since
- * replies are actually read in Gmail itself, not this app. */
+/** Plain category names, not namespaced under "Mailflow/" — several
+ * accounts already had labels with these exact names from the prior N8N
+ * workflow, and reusing them avoids a duplicate label per category sitting
+ * alongside the one Jayme already reads from. Applied directly in Gmail
+ * (not just shown inside Mailflow's own Inbox page) since replies are
+ * actually read in Gmail itself, not this app. */
 export const CATEGORY_LABEL_NAMES: Record<ReplyCategory, string> = {
-  interested: "Mailflow/Interested",
-  not_interested: "Mailflow/Not Interested",
-  follow_up: "Mailflow/Follow Up",
-  ooo_temporary: "Mailflow/Out of Office",
-  ooo_departed: "Mailflow/Departed",
-  opt_out: "Mailflow/Opted Out",
-  bounce: "Mailflow/Bounce",
-  unclear: "Mailflow/Unclear",
+  interested: "Interested",
+  not_interested: "Not Interested",
+  follow_up: "Follow Up",
+  ooo_temporary: "Out of Office",
+  ooo_departed: "Departed",
+  opt_out: "Opted Out",
+  bounce: "Bounce",
+  unclear: "Unclear",
 };
 
 type GmailLabel = { id: string; name: string };

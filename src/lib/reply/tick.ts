@@ -225,7 +225,11 @@ export async function runReplyPollTick(supabase: SupabaseClient): Promise<ReplyT
           // never undo or block classification, matching, suppression, or
           // pausing, which already happened by this point.
           const labelId = await getOrCreateLabelId(accessToken, account.id, CATEGORY_LABEL_NAMES[category], labelCache);
-          await applyGmailLabel(accessToken, email.gmailMessageId, labelId);
+          // Bounce/departed DSNs and auto-replies pile up and clutter the
+          // primary inbox view with nothing worth reading — archived out of
+          // INBOX but still fully visible/filterable under their own label.
+          const shouldArchive = category === "bounce" || category === "ooo_departed";
+          await applyGmailLabel(accessToken, email.gmailMessageId, labelId, shouldArchive ? ["INBOX"] : undefined);
         } catch (err) {
           const message = err instanceof Error ? err.message : "Unknown error";
           result.errors.push({ account: `${account.email_address} (message ${messageId})`, error: message });

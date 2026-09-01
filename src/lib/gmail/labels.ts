@@ -61,11 +61,16 @@ export async function getOrCreateLabelId(
   return created.id;
 }
 
-export async function applyGmailLabel(accessToken: string, messageId: string, labelId: string): Promise<void> {
+export async function applyGmailLabel(
+  accessToken: string,
+  messageId: string,
+  labelId: string,
+  removeLabelIds?: string[],
+): Promise<void> {
   const res = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${messageId}/modify`, {
     method: "POST",
     headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ addLabelIds: [labelId] }),
+    body: JSON.stringify({ addLabelIds: [labelId], ...(removeLabelIds ? { removeLabelIds } : {}) }),
   });
   if (!res.ok) throw new Error(`Gmail apply label failed: ${res.status} ${await res.text()}`);
 }

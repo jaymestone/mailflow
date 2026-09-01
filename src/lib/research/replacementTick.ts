@@ -4,6 +4,7 @@ import { findReplacementContact } from "./findReplacement";
 export type ReplacementTickResult = {
   processed: number;
   replaced: number;
+  reenrolled: number;
   noReplacementFound: number;
   skipped: number;
   errors: { id: string; error: string }[];
@@ -20,6 +21,7 @@ export async function runReplacementResearchTick(supabase: SupabaseClient): Prom
   const result: ReplacementTickResult = {
     processed: 0,
     replaced: 0,
+    reenrolled: 0,
     noReplacementFound: 0,
     skipped: 0,
     errors: [],
@@ -27,7 +29,9 @@ export async function runReplacementResearchTick(supabase: SupabaseClient): Prom
 
   const { data: pending } = await supabase
     .from("replacement_queue")
-    .select("id, venue, venue_type, city, state, country, list_id, removed_contact_email, removed_reason")
+    .select(
+      "id, venue, venue_type, city, state, country, list_id, removed_contact_email, removed_reason, campaign_ids",
+    )
     .eq("status", "pending")
     .order("removed_at", { ascending: true })
     .limit(BATCH_SIZE);
@@ -82,24 +86,60 @@ export async function runReplacementResearchTick(supabase: SupabaseClient): Prom
         continue;
       }
 
-      const note = found.usedGenericFallback
+      const genericNote = found.usedGenericFallback
         ? `${found.note} (generic inbox — used as last resort, no named alternative found)`
         : found.note;
 
-      await supabase.from("contacts").insert({
-        first_name: found.first_name,
-        last_name: found.last_name,
-        email: found.email,
-        venue: found.venue ?? item.venue,
-        venue_type: found.venue_type ?? item.venue_type,
-        city: found.city ?? item.city,
-        state: found.state ?? item.state,
-        country: found.country ?? item.country,
-        website: found.website,
-        list_id: item.list_id,
-        source: `Auto-replacement for ${item.removed_contact_email} (${item.removed_reason})`,
-        notes: note,
-      });
+      const { data: inserted, error: insertError } = await supabase
+        .from("contacts")
+        .insert({
+          first_name: found.first_name,
+          last_name: found.last_name,
+          email: found.email,
+          venue: found.venue ?? item.venue,
+          venue_type: found.venue_type ?? item.venue_type,
+          city: found.city ?? item.city,
+          state: found.state ?? item.state,
+          country: found.country ?? item.country,
+          website: found.website,
+          list_id: item.list_id,
+          source: `Auto-replacement for ${item.removed_contact_email} (${item.removed_reason})`,
+          notes: genericNote,
+        })
+        .select("id")
+        .single();
+
+      if (insertError || !inserted) throw new Error(insertError?.message ?? "Contact insert returned no row");
+
+      // Re-enroll into whatever campaigns the deleted contact was actively
+      // in — starting fresh at step 1 (campaign_members defaults to
+      // current_step 0), since this contact has never received any of the
+      // sequence. A campaign that's since been paused or completed is left
+      // alone rather than resumed on its behalf.
+      const campaignIds: string[] = item.campaign_ids ?? [];
+      let enrolledNames: string[] = [];
+      let skippedNames: string[] = [];
+      if (campaignIds.length > 0) {
+        const { data: campaigns } = await supabase.from("campaigns").select("id, name, status").in("id", campaignIds);
+        const active = (campaigns ?? []).filter((c) => c.status === "active");
+        const inactive = (campaigns ?? []).filter((c) => c.status !== "active");
+        if (active.length > 0) {
+          const { error: enrollError } = await supabase
+            .from("campaign_members")
+            .insert(active.map((c) => ({ campaign_id: c.id, contact_id: inserted.id })));
+          if (!enrollError) {
+            enrolledNames = active.map((c) => c.name);
+            result.reenrolled++;
+          }
+        }
+        skippedNames = inactive.map((c) => c.name);
+      }
+
+      const enrollNote =
+        enrolledNames.length > 0 ? ` Re-enrolled in: ${enrolledNames.join(", ")}.` : "";
+      const skipNote =
+        skippedNames.length > 0 ? ` Not re-enrolled (no longer active): ${skippedNames.join(", ")}.` : "";
+      const note = `${genericNote}${enrollNote}${skipNote}`;
 
       await supabase
         .from("replacement_queue")

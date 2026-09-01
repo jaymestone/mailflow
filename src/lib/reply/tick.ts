@@ -137,6 +137,21 @@ export async function runReplyPollTick(supabase: SupabaseClient): Promise<ReplyT
           // bounce for visibility, but the address isn't touched, since it
           // may well still be good on the next attempt.
           const isHardBounce = category === "bounce" && bounceInfo.isHard;
+
+          // Captured before the ooo_departed pause step below flips these
+          // to 'paused' — so a later replacement contact can be re-enrolled
+          // in the campaigns this contact was actually being pursued in,
+          // not an empty list because the snapshot was taken too late.
+          let activeCampaignIds: string[] = [];
+          if ((isHardBounce || category === "ooo_departed") && match.contactId) {
+            const { data: memberships } = await supabase
+              .from("campaign_members")
+              .select("campaign_id")
+              .eq("contact_id", match.contactId)
+              .eq("member_status", "active");
+            activeCampaignIds = (memberships ?? []).map((m) => m.campaign_id);
+          }
+
           if (isHardBounce || category === "opt_out" || category === "ooo_departed") {
             // suppression.email has an expression unique index (lower(email)), which
             // Supabase's upsert onConflict can't target directly — check-then-insert instead.
@@ -213,6 +228,7 @@ export async function runReplyPollTick(supabase: SupabaseClient): Promise<ReplyT
                 list_id: contact.list_id,
                 removed_contact_email: contact.email,
                 removed_reason: category,
+                campaign_ids: activeCampaignIds,
               });
               await supabase.from("contacts").delete().eq("id", match.contactId);
               result.removedForReplacement++;

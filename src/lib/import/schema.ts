@@ -42,5 +42,13 @@ export const NON_CONTACT_SHEET_NAMES = new Set(
     "Send Counters",
     "Suppression",
     "Email Log",
+    // Internal research/lead-finding scratch tabs, not curated contact
+    // lists — some of these have their own "email" column, so without this
+    // exclusion they'd otherwise pass the "has an Email column" contact-tab
+    // check and get imported as junk lists.
+    "ZZ_FOUND",
+    "ZZ_QUEUE",
+    "ZZ_PEOPLE",
+    "ZZ_DOMAINS",
   ].map((s) => s.toLowerCase()),
 );

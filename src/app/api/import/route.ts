@@ -26,7 +26,7 @@ export async function POST(request: Request) {
   const buffer = await file.arrayBuffer();
   let sheets;
   try {
-    sheets = parseWorkbook(buffer);
+    sheets = parseWorkbook(buffer, file.name);
   } catch {
     return NextResponse.json({ error: "Could not parse file as CSV/XLSX" }, { status: 400 });
   }

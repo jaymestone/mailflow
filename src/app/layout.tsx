@@ -18,6 +18,9 @@ const publicSans = Public_Sans({
 export const metadata: Metadata = {
   title: "MailFlow",
   description: "Venue outreach campaign manager",
+  verification: {
+    google: "q-jaM5QvmcBUklycH1E4IyN1IHFxuTmPz-MhqrTHeYA",
+  },
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

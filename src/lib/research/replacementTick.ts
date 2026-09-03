@@ -10,12 +10,18 @@ export type ReplacementTickResult = {
   errors: { id: string; error: string }[];
 };
 
-// Each item does a real Claude + web-search lookup (can take several
-// seconds per web_search round), and this runs inside a 60s serverless
-// function (Vercel Hobby plan's ceiling) — so one run only clears a bounded
-// slice of the queue. Any leftover pending rows just carry over to next
-// week's run; nothing is lost, the queue self-drains over time.
-const BATCH_SIZE = 8;
+// Each item does a real Claude + web-search lookup, processed sequentially
+// (can take several seconds per web_search round) — and cron-job.org's own
+// client-side timeout (~30s) is shorter than this route's Vercel
+// maxDuration (60s), so a batch that takes too long gets reported (and
+// actually killed mid-run, since the connection drop cancels the function)
+// as failed well before Vercel's own limit would matter. Confirmed this
+// happening in production: the daily run silently failed for two days
+// straight at this exact ceiling. Kept small enough that even a slow
+// research call per item comfortably finishes under cron-job.org's limit;
+// any leftover pending rows just carry over to the next day's run — nothing
+// is lost, the queue self-drains over time regardless of batch size.
+const BATCH_SIZE = 2;
 
 export async function runReplacementResearchTick(supabase: SupabaseClient): Promise<ReplacementTickResult> {
   const result: ReplacementTickResult = {

@@ -10,6 +10,16 @@ import type { ReplyCategory } from "./types";
 
 const DEFAULT_OOO_SNOOZE_DAYS = 7;
 
+// cron-job.org's own client-side request timeout (~30s) is shorter than
+// this route's Vercel maxDuration (60s) — a burst of new messages (e.g. a
+// pile of bounces landing at once) can take long enough to process that
+// cron-job.org gives up and reports the whole run as failed, even though
+// the work was still legitimately in progress. Capping how many *newly
+// seen* messages get processed per invocation keeps a normal run
+// comfortably under that ceiling; a message already recorded in
+// inbound_messages is a cheap lookup and doesn't count against this.
+const MAX_NEW_MESSAGES_PER_TICK = 8;
+
 export type ReplyTickResult = {
   accountsPolled: number;
   messagesFetched: number;
@@ -78,7 +88,14 @@ export async function runReplyPollTick(supabase: SupabaseClient): Promise<ReplyT
         account.last_history_id,
       );
 
+      let newlyProcessed = 0;
+      let hitBatchCap = false;
+
       for (const messageId of messageIds) {
+        if (newlyProcessed >= MAX_NEW_MESSAGES_PER_TICK) {
+          hitBatchCap = true;
+          break;
+        }
         // Scoped to this one message: a failure here (e.g. the classifier
         // API hiccups on this specific message) must not be mistaken for
         // an account-level problem, and must not stop the remaining
@@ -92,6 +109,7 @@ export async function runReplyPollTick(supabase: SupabaseClient): Promise<ReplyT
             .maybeSingle();
           if (existing) continue;
 
+          newlyProcessed++;
           const email = await fetchGmailMessage(accessToken, messageId);
           if (email.labelIds.includes("SENT")) continue; // our own outbound copy
 
@@ -252,16 +270,26 @@ export async function runReplyPollTick(supabase: SupabaseClient): Promise<ReplyT
           const message = err instanceof Error ? err.message : "Unknown error";
           result.errors.push({ account: `${account.email_address} (message ${messageId})`, error: message });
           // Deliberately not marked as an account error, and last_history_id
-          // still advances past this message below — otherwise one message
-          // that reliably fails to classify would get re-fetched and
-          // re-fail on every future poll forever, permanently stuck.
+          // still advances past this message below (as long as the batch
+          // cap wasn't hit) — otherwise one message that reliably fails to
+          // classify would get re-fetched and re-fail on every future poll
+          // forever, permanently stuck.
         }
       }
 
-      await supabase
-        .from("connected_accounts")
-        .update({ last_history_id: newHistoryId })
-        .eq("id", account.id);
+      // Only advance the checkpoint after getting through every message in
+      // this batch — if the cap cut it short, leaving last_history_id where
+      // it was means the next tick re-fetches the same full range. Anything
+      // already processed this round is a cheap existing-row lookup and
+      // gets skipped instantly; only the still-unprocessed remainder
+      // actually costs time, so the batch naturally drains over successive
+      // ticks instead of the excess being silently skipped forever.
+      if (!hitBatchCap) {
+        await supabase
+          .from("connected_accounts")
+          .update({ last_history_id: newHistoryId })
+          .eq("id", account.id);
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error";
       result.errors.push({ account: account.email_address, error: message });

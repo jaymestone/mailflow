@@ -76,10 +76,13 @@ export async function findReplacementContact(query: ReplacementQuery): Promise<R
   // run — a per-call timeout keeps a slow or hung request from silently
   // eating that entire budget with nothing to show for it (confirmed in
   // production: an unbounded call here is exactly what blew past even
-  // Vercel's 60s ceiling, not just cron-job.org's shorter one). maxRetries
-  // is kept low since this loop can already run up to 3 times on its own
-  // for legitimate pause_turn continuations — stacking the SDK's own
-  // retries on top risks far more total calls than the time budget allows.
+  // Vercel's 60s ceiling, not cron-job.org's shorter one). maxRetries is 0
+  // (not the SDK default) deliberately — this loop can already run up to
+  // 3 times on its own for legitimate pause_turn continuations, and
+  // cron-job.org's own client timeout (~30s) is tight enough that an SDK
+  // retry doubling a single call's wait (confirmed: maxRetries: 1 turned
+  // one 18s timeout into ~36s, blowing past that ceiling) isn't affordable
+  // here — fail fast and let tomorrow's run retry instead.
   for (let attempt = 0; attempt < 3; attempt++) {
     const response = await getClient().messages.create(
       {
@@ -89,7 +92,7 @@ export async function findReplacementContact(query: ReplacementQuery): Promise<R
         tools: [{ type: "web_search_20260209", name: "web_search", max_uses: 4 }],
         messages,
       },
-      { timeout: 18000, maxRetries: 1 },
+      { timeout: 20000, maxRetries: 0 },
     );
 
     if (response.stop_reason === "pause_turn") {

@@ -164,7 +164,7 @@ export async function runReplyPollTick(supabase: SupabaseClient): Promise<ReplyT
           // in the campaigns this contact was actually being pursued in,
           // not an empty list because the snapshot was taken too late.
           let activeCampaignIds: string[] = [];
-          if ((isHardBounce || category === "ooo_departed") && match.contactId) {
+          if ((isHardBounce || category === "ooo_departed" || category === "opt_out") && match.contactId) {
             const { data: memberships } = await supabase
               .from("campaign_members")
               .select("campaign_id")
@@ -224,16 +224,18 @@ export async function runReplyPollTick(supabase: SupabaseClient): Promise<ReplyT
 
           // A hard bounce means the address is dead (a soft bounce is left
           // alone entirely — see isHardBounce above); ooo_departed means
-          // that *person* is gone, but the venue itself may still be a real
-          // prospect — either way, suppression already stops this exact
-          // address from ever being recontacted, so keeping the contact
-          // record around serves no purpose. Queue what's known about the
-          // venue first so a later research pass can go find whoever
-          // replaced them, then remove the now-dead contact (cascades to
-          // their campaign_members, outbound_sends, notes, and segment
+          // that *person* is gone; opt_out means they explicitly asked not
+          // to be contacted again — in every case suppression already
+          // stops this exact address from ever being recontacted, so
+          // keeping the contact record around serves no purpose, and the
+          // venue itself may still be worth a fresh pitch to someone else
+          // down the line. Queue what's known about the venue first so a
+          // later research pass can go find whoever replaced them, then
+          // remove the now-dead contact (cascades to their
+          // campaign_members, outbound_sends, notes, and segment
           // membership — history for a contact who can never be reached
           // again isn't useful to keep).
-          if ((isHardBounce || category === "ooo_departed") && match.contactId) {
+          if ((isHardBounce || category === "ooo_departed" || category === "opt_out") && match.contactId) {
             const { data: contact } = await supabase
               .from("contacts")
               .select("email, venue, venue_type, city, state, country, list_id")

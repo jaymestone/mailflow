@@ -20,6 +20,13 @@ export type ReplacementTickResult = {
 // the queue self-drains over time regardless of batch size.
 const BATCH_SIZE = 1;
 
+// With only one item tried per run, the query always resurfaces the same
+// oldest pending row until it resolves — a deterministically slow search
+// (not just a one-off network blip) would otherwise block every other
+// queued venue behind it forever. Give up after a few tries and let the
+// rest of the queue through.
+const MAX_RESEARCH_ATTEMPTS = 3;
+
 export async function runReplacementResearchTick(supabase: SupabaseClient): Promise<ReplacementTickResult> {
   const result: ReplacementTickResult = {
     processed: 0,
@@ -33,7 +40,7 @@ export async function runReplacementResearchTick(supabase: SupabaseClient): Prom
   const { data: pending } = await supabase
     .from("replacement_queue")
     .select(
-      "id, venue, venue_type, city, state, country, list_id, removed_contact_email, removed_reason, campaign_ids",
+      "id, venue, venue_type, city, state, country, list_id, removed_contact_email, removed_reason, campaign_ids, research_attempts",
     )
     .eq("status", "pending")
     .order("removed_at", { ascending: true })
@@ -152,9 +159,28 @@ export async function runReplacementResearchTick(supabase: SupabaseClient): Prom
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error";
       result.errors.push({ id: item.id, error: message });
-      // Left as 'pending' — a transient failure (e.g. the API hiccups on
-      // this item) shouldn't be treated as "no replacement found"; next
-      // week's run picks it up and tries again.
+
+      const attempts = (item.research_attempts ?? 0) + 1;
+      if (attempts >= MAX_RESEARCH_ATTEMPTS) {
+        // Deterministically stuck (e.g. a search that reliably needs more
+        // time than the per-call timeout allows) — give up so it stops
+        // blocking every other queued venue behind it, and flag it for a
+        // manual look instead of retrying forever.
+        await supabase
+          .from("replacement_queue")
+          .update({
+            status: "no_replacement_found",
+            research_attempts: attempts,
+            researched_at: new Date().toISOString(),
+            notes: `Research failed ${attempts} times in a row (${message}) — needs a manual look.`,
+          })
+          .eq("id", item.id);
+      } else {
+        // Left as 'pending' — a transient failure (e.g. the API hiccups on
+        // this item) shouldn't be treated as "no replacement found" yet;
+        // next run picks it up and tries again.
+        await supabase.from("replacement_queue").update({ research_attempts: attempts }).eq("id", item.id);
+      }
     }
   }
 

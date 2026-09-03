@@ -6,7 +6,18 @@ import { findUnresolvedTokens, resolveTemplate } from "@/lib/templates/resolve";
 import { wrapEmailHtml } from "@/lib/templates/emailHtml";
 import { formatFromAddress, getAccessToken, sendGmailMessage } from "@/lib/gmail/client";
 
-const DEFAULT_BATCH_LIMIT = 100;
+// Per-account daily ramp caps (roundRobin.ts) already bound total volume for
+// the day — this constant's only job is pacing *within* a tick, since
+// nothing else stood between "N contacts became due at once" (e.g. every
+// step-1 send right after enrolling a new campaign) and firing all N sends
+// back-to-back with nothing but network latency between them. That's a real
+// burst-sending pattern, risky from a personal/Workspace Gmail account
+// rather than dedicated ESP infrastructure. With the send window covering
+// ~100+ ticks a day at the usual 5-minute cron cadence, a small per-tick
+// cap still comfortably reaches the daily caps (10/tick × 100+ ticks
+// dwarfs the ~150/account/day ceiling) while spreading any large batch of
+// simultaneously-due contacts out over hours instead of seconds.
+const DEFAULT_BATCH_LIMIT = 10;
 
 type DueMember = {
   campaign_member_id: string;

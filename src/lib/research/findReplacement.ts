@@ -70,14 +70,27 @@ export async function findReplacementContact(query: ReplacementQuery): Promise<R
   // Same pause_turn resume pattern as enrichQuickAddRow — finding a brand
   // new contact (not just filling in known-venue details) is a harder
   // search, so this gets one more web_search round than that does.
+  //
+  // This whole function runs inside a 60s Vercel function (the daily
+  // replacement-research cron route), with only one item processed per
+  // run — a per-call timeout keeps a slow or hung request from silently
+  // eating that entire budget with nothing to show for it (confirmed in
+  // production: an unbounded call here is exactly what blew past even
+  // Vercel's 60s ceiling, not just cron-job.org's shorter one). maxRetries
+  // is kept low since this loop can already run up to 3 times on its own
+  // for legitimate pause_turn continuations — stacking the SDK's own
+  // retries on top risks far more total calls than the time budget allows.
   for (let attempt = 0; attempt < 3; attempt++) {
-    const response = await getClient().messages.create({
-      model: "claude-opus-5",
-      max_tokens: 8000,
-      system: SYSTEM,
-      tools: [{ type: "web_search_20260209", name: "web_search", max_uses: 4 }],
-      messages,
-    });
+    const response = await getClient().messages.create(
+      {
+        model: "claude-opus-5",
+        max_tokens: 8000,
+        system: SYSTEM,
+        tools: [{ type: "web_search_20260209", name: "web_search", max_uses: 4 }],
+        messages,
+      },
+      { timeout: 18000, maxRetries: 1 },
+    );
 
     if (response.stop_reason === "pause_turn") {
       messages = [...messages, { role: "assistant", content: response.content }];

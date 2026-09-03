@@ -61,13 +61,24 @@ export async function classifyReply(
   reasoning: string;
   oooReturnDate: string | null;
 }> {
-  const response = await getClient().messages.create({
-    model: "claude-opus-5",
-    max_tokens: 1024,
-    system: systemPrompt(),
-    output_config: { format: { type: "json_schema", schema: SCHEMA } },
-    messages: [{ role: "user", content: `Subject: ${subject}\n\nBody:\n${body.slice(0, 4000)}` }],
-  });
+  // cron-job.org's client timeout on the reply-poll route is a confirmed
+  // hard 30s ceiling (not configurable, even on request) — a hung request
+  // here would silently eat the whole tick's budget, and cron-job.org
+  // disconnecting past that point actually kills the in-flight function
+  // (see replacementTick.ts's same fix), losing progress on every message
+  // still queued behind this one. maxRetries: 0 since a stuck call should
+  // fail fast, not double the wait — this message just gets picked up on
+  // the next poll like any other per-message failure already does.
+  const response = await getClient().messages.create(
+    {
+      model: "claude-opus-5",
+      max_tokens: 1024,
+      system: systemPrompt(),
+      output_config: { format: { type: "json_schema", schema: SCHEMA } },
+      messages: [{ role: "user", content: `Subject: ${subject}\n\nBody:\n${body.slice(0, 4000)}` }],
+    },
+    { timeout: 12000, maxRetries: 0 },
+  );
 
   const textBlock = response.content.find((b) => b.type === "text");
   if (!textBlock || textBlock.type !== "text") {

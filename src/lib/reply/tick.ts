@@ -10,15 +10,18 @@ import type { ReplyCategory } from "./types";
 
 const DEFAULT_OOO_SNOOZE_DAYS = 7;
 
-// cron-job.org's own client-side request timeout (~30s) is shorter than
-// this route's Vercel maxDuration (60s) — a burst of new messages (e.g. a
-// pile of bounces landing at once) can take long enough to process that
-// cron-job.org gives up and reports the whole run as failed, even though
-// the work was still legitimately in progress. Capping how many *newly
-// seen* messages get processed per invocation keeps a normal run
-// comfortably under that ceiling; a message already recorded in
-// inbound_messages is a cheap lookup and doesn't count against this.
-const MAX_NEW_MESSAGES_PER_TICK = 8;
+// cron-job.org's own client-side request timeout is a confirmed hard 30s
+// ceiling (checked directly — not configurable even on request), shorter
+// than this route's Vercel maxDuration (60s). A burst of new messages
+// (e.g. a pile of bounces landing at once, or several replies that each
+// need a real classifyReply call) can take long enough to process that
+// cron-job.org disconnects — which actually kills the in-flight function,
+// not just misreports it, so anything still queued behind the disconnect
+// point is lost progress for this run. Capping how many *newly seen*
+// messages get processed per invocation keeps a normal run comfortably
+// under that ceiling; a message already recorded in inbound_messages is a
+// cheap lookup and doesn't count against this cap.
+const MAX_NEW_MESSAGES_PER_TICK = 5;
 
 export type ReplyTickResult = {
   accountsPolled: number;

@@ -163,8 +163,10 @@ export async function runReplyPollTick(supabase: SupabaseClient): Promise<ReplyT
           // to 'paused' — so a later replacement contact can be re-enrolled
           // in the campaigns this contact was actually being pursued in,
           // not an empty list because the snapshot was taken too late.
+          // Only needed for the two reasons that actually queue for
+          // replacement research below — opt_out never does (see there).
           let activeCampaignIds: string[] = [];
-          if ((isHardBounce || category === "ooo_departed" || category === "opt_out") && match.contactId) {
+          if ((isHardBounce || category === "ooo_departed") && match.contactId) {
             const { data: memberships } = await supabase
               .from("campaign_members")
               .select("campaign_id")
@@ -222,20 +224,30 @@ export async function runReplyPollTick(supabase: SupabaseClient): Promise<ReplyT
               .eq("member_status", "active");
           }
 
-          // A hard bounce means the address is dead (a soft bounce is left
-          // alone entirely — see isHardBounce above); ooo_departed means
-          // that *person* is gone; opt_out means they explicitly asked not
-          // to be contacted again — in every case suppression already
+          // A hard bounce means the address is dead; ooo_departed means
+          // that *person* is gone — in both cases suppression already
           // stops this exact address from ever being recontacted, so
           // keeping the contact record around serves no purpose, and the
-          // venue itself may still be worth a fresh pitch to someone else
-          // down the line. Queue what's known about the venue first so a
-          // later research pass can go find whoever replaced them, then
-          // remove the now-dead contact (cascades to their
-          // campaign_members, outbound_sends, notes, and segment
-          // membership — history for a contact who can never be reached
-          // again isn't useful to keep).
-          if ((isHardBounce || category === "ooo_departed" || category === "opt_out") && match.contactId) {
+          // venue itself is presumably still a real prospect for whoever
+          // replaced them. Queue what's known about the venue first so a
+          // later research pass can go find that replacement, then remove
+          // the now-dead contact (cascades to their campaign_members,
+          // outbound_sends, notes, and segment membership — history for a
+          // contact who can never be reached again isn't useful to keep).
+          //
+          // opt_out is deliberately handled separately, below: it's a
+          // preference signal, not a validity signal, and there's no way
+          // to tell from the reply alone whether it represents just this
+          // person or the whole organization's wishes (someone unsubscribing
+          // might be the venue's only contact, or one of several — the
+          // reply doesn't say). Auto-researching a replacement risks either
+          // wasting effort on a venue that no longer exists (a real case:
+          // one opt-out explicitly said the festival hadn't run since 2016)
+          // or immediately re-approaching an org that just asked to be left
+          // alone — so the contact still gets removed (suppression already
+          // covers recontact regardless), it's just never queued to look
+          // for someone else there.
+          if ((isHardBounce || category === "ooo_departed") && match.contactId) {
             const { data: contact } = await supabase
               .from("contacts")
               .select("email, venue, venue_type, city, state, country, list_id")
@@ -256,6 +268,8 @@ export async function runReplyPollTick(supabase: SupabaseClient): Promise<ReplyT
               await supabase.from("contacts").delete().eq("id", match.contactId);
               result.removedForReplacement++;
             }
+          } else if (category === "opt_out" && match.contactId) {
+            await supabase.from("contacts").delete().eq("id", match.contactId);
           }
 
           // Applied last and after every DB side effect above has already

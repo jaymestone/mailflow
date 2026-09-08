@@ -10,7 +10,7 @@ import {
   makeBodyEditorExtensions,
   rawStringToContent,
   docToRawString,
-  normalizePastedHtml,
+  handleBodyPaste,
   indentLine,
   outdentLine,
 } from "./rich-body-extensions";
@@ -154,7 +154,7 @@ function StepForm({
       attributes: {
         class: "min-h-[160px] text-sm text-ink outline-none [&_p]:m-0",
       },
-      transformPastedHTML: normalizePastedHtml,
+      handlePaste: handleBodyPaste,
     },
   });
 

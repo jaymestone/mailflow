@@ -1,34 +1,66 @@
+import { getSchema } from "@tiptap/core";
 import { describe, expect, it } from "vitest";
-import { normalizePastedHtml } from "./rich-body-extensions";
+import { flattenParagraphsToSingle, makeBodyEditorExtensions } from "./rich-body-extensions";
 
-describe("normalizePastedHtml", () => {
+// A real schema built from the editor's actual extension set — the same
+// one `useEditor` constructs in the app — rather than a hand-rolled stand-in,
+// so a schema change (e.g. renaming a node) would break this test too.
+const schema = getSchema(makeBodyEditorExtensions(""));
+
+function paragraph(text: string) {
+  return schema.nodes.paragraph.create(null, text ? schema.text(text) : undefined);
+}
+
+function textOf(node: ReturnType<typeof paragraph>): string {
+  let out = "";
+  node.content.forEach((child) => {
+    if (child.type.name === "hardBreak") out += "\n";
+    else out += child.text ?? "";
+  });
+  return out;
+}
+
+describe("flattenParagraphsToSingle", () => {
+  it("returns null when there's nothing to flatten (0 or 1 paragraphs)", () => {
+    expect(flattenParagraphsToSingle(schema, schema.nodes.doc.create().content)).toBeNull();
+    const oneParagraph = schema.nodes.doc.create(null, [paragraph("solo")]).content;
+    expect(flattenParagraphsToSingle(schema, oneParagraph)).toBeNull();
+  });
+
   it("collapses a paragraph boundary between two tight lines to a single break", () => {
-    expect(normalizePastedHtml("<p>Line A</p><p>Line B</p>")).toBe("Line A<br>Line B");
+    const frag = schema.nodes.doc.create(null, [paragraph("Line A"), paragraph("Line B")]).content;
+    const result = flattenParagraphsToSingle(schema, frag);
+    expect(result).not.toBeNull();
+    expect(textOf(result!)).toBe("Line A\nLine B");
   });
 
-  it("preserves exactly one blank line when the source has one empty paragraph between two others", () => {
-    expect(normalizePastedHtml("<p>Para 1</p><p></p><p>Para 2</p>")).toBe("Para 1<br><br>Para 2");
+  it("preserves exactly one blank line when the source has an empty paragraph between two others", () => {
+    const emptyPara = schema.nodes.paragraph.create();
+    const frag = schema.nodes.doc.create(null, [paragraph("Para 1"), emptyPara, paragraph("Para 2")]).content;
+    const result = flattenParagraphsToSingle(schema, frag);
+    expect(textOf(result!)).toBe("Para 1\n\nPara 2");
   });
 
-  it("doesn't invent a blank line between every line the way the un-normalized paste used to", () => {
-    const pasted =
-      "<p>THE LITTLE MERCIES — A rising force</p><p>CHARLIE &amp; THE TROPICALES — Calypso, cumbia</p><p>AMANDA PASCALI — Gen Z troubadour</p>";
-    const result = normalizePastedHtml(pasted);
-    expect(result).toBe(
-      "THE LITTLE MERCIES — A rising force<br>CHARLIE &amp; THE TROPICALES — Calypso, cumbia<br>AMANDA PASCALI — Gen Z troubadour",
+  it("doesn't invent a blank line between every line the way the un-flattened paste used to", () => {
+    const frag = schema.nodes.doc.create(null, [
+      paragraph("THE LITTLE MERCIES — A rising force"),
+      paragraph("CHARLIE & THE TROPICALES — Calypso, cumbia"),
+      paragraph("SAMIR LANGUS — Moroccan trance music, rewired in New York"),
+    ]).content;
+    const result = flattenParagraphsToSingle(schema, frag);
+    const text = textOf(result!);
+    expect(text).toBe(
+      "THE LITTLE MERCIES — A rising force\nCHARLIE & THE TROPICALES — Calypso, cumbia\nSAMIR LANGUS — Moroccan trance music, rewired in New York",
     );
-    expect(result).not.toMatch(/<br>\s*<br>/);
+    expect(text).not.toMatch(/\n\n/);
   });
 
-  it("strips the outer wrapping tag without adding a stray leading/trailing break", () => {
-    expect(normalizePastedHtml("<div>Just one line</div>")).toBe("Just one line");
-  });
-
-  it("treats div and heading boundaries the same as paragraph boundaries", () => {
-    expect(normalizePastedHtml("<div>Line A</div><h2>Line B</h2><div>Line C</div>")).toBe("Line A<br>Line B<br>Line C");
-  });
-
-  it("handles attributes on the block tags (e.g. pasted from a styled source)", () => {
-    expect(normalizePastedHtml('<p style="margin:0">Line A</p><p class="x">Line B</p>')).toBe("Line A<br>Line B");
+  it("preserves inline marks (bold/italic/link) carried on the original paragraphs' content", () => {
+    const bold = schema.nodes.paragraph.create(null, schema.text("Bold line", [schema.marks.bold.create()]));
+    const plain = paragraph("Plain line");
+    const frag = schema.nodes.doc.create(null, [bold, plain]).content;
+    const result = flattenParagraphsToSingle(schema, frag);
+    const firstChild = result!.content.firstChild!;
+    expect(firstChild.marks.some((m) => m.type.name === "bold")).toBe(true);
   });
 });

@@ -10,9 +10,9 @@ import { Italic } from "@tiptap/extension-italic";
 import { Link } from "@tiptap/extension-link";
 import { Placeholder } from "@tiptap/extension-placeholder";
 import { Extension, Node, type JSONContent } from "@tiptap/core";
-import type { Node as PMNode } from "@tiptap/pm/model";
+import { Fragment, Slice, type Node as PMNode, type Schema } from "@tiptap/pm/model";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
-import { Decoration, DecorationSet } from "@tiptap/pm/view";
+import { Decoration, DecorationSet, type EditorView } from "@tiptap/pm/view";
 import { NodeViewWrapper, ReactNodeViewRenderer, type NodeViewProps } from "@tiptap/react";
 import { resolveMergeFields } from "@/lib/templates/resolve";
 
@@ -154,23 +154,53 @@ export function outdentLine(doc: PMNode, from: number): { from: number; to: numb
   return leading > 0 ? { from: start, to: start + leading } : null;
 }
 
-/** Normalizes pasted HTML before ProseMirror ever parses it, for
- * `transformPastedHTML`. The editor is designed around a single paragraph
- * (see `HardBreakOnEnter` and `docToRawString` above) — but pasted content
- * from Gmail, Word, a webpage, or a chat UI arrives as one `<p>`/`<div>`
- * per visual line. Left alone, each of those becomes its own paragraph
- * node, and `docToRawString` unconditionally joins every paragraph pair
- * with "\n\n" — so a paste doesn't just keep its line breaks, it doubles
- * every one of them (and doubles blank lines to two blank lines), which is
- * the "extra lines between everything" bug. Collapsing each block-to-block
- * boundary to a single `<br>` here means the number of line breaks in the
- * pasted result exactly matches the source, whether that's zero (tight
- * consecutive lines) or one (an actual blank line) — nothing is invented,
- * nothing is doubled. */
-export function normalizePastedHtml(html: string): string {
-  return html
-    .replace(/<\/(p|div|h[1-6])>\s*<(p|div|h[1-6])(?:\s[^>]*)?>/gi, "<br>")
-    .replace(/<\/?(p|div|h[1-6])(?:\s[^>]*)?>/gi, "");
+/** Flattens a paragraph-per-line Fragment (what ProseMirror parses pasted
+ * HTML into — one `paragraph` node per source `<p>`/`<div>`/etc., however
+ * deeply or oddly that source nested them) into a single paragraph with a
+ * `hardBreak` at each former paragraph boundary. The editor is designed
+ * around exactly one paragraph (see `HardBreakOnEnter` and `docToRawString`
+ * above); left alone, each pasted paragraph survives as its own node, and
+ * `docToRawString` unconditionally joins every paragraph pair with "\n\n"
+ * — so a paste doesn't just keep its line breaks, it doubles every one of
+ * them (and turns one real blank line into two). Operating on the already-
+ * parsed Fragment rather than the raw HTML string is what makes this
+ * reliable: ProseMirror's own DOM-aware parser has already resolved
+ * whatever the source's actual markup shape was (styled spans, nested
+ * wrapper divs, browser-inserted attributes) into real paragraph nodes by
+ * this point, so there's no HTML pattern to guess at or miss. Returns null
+ * when there's nothing to flatten (zero or one paragraph, or a schema that
+ * for some reason lacks paragraph/hardBreak — shouldn't happen with this
+ * editor's fixed extension set, but fail safe rather than throw). */
+export function flattenParagraphsToSingle(schema: Schema, content: Fragment): PMNode | null {
+  const paragraphType = schema.nodes.paragraph;
+  const hardBreakType = schema.nodes.hardBreak;
+  if (!paragraphType || !hardBreakType) return null;
+
+  const paragraphs: PMNode[] = [];
+  content.forEach((node) => {
+    if (node.type === paragraphType) paragraphs.push(node);
+  });
+  if (paragraphs.length <= 1) return null;
+
+  const inline: PMNode[] = [];
+  paragraphs.forEach((paragraph, i) => {
+    if (i > 0) inline.push(hardBreakType.create());
+    paragraph.content.forEach((child) => inline.push(child));
+  });
+
+  return paragraphType.create(null, Fragment.from(inline));
+}
+
+/** `handlePaste` for the body editor — see `flattenParagraphsToSingle`.
+ * Returning `true` tells ProseMirror the paste is fully handled (it won't
+ * also insert the original multi-paragraph slice); returning `false` falls
+ * through to ProseMirror's normal paste handling for the single-paragraph
+ * (or non-text) case, where there's nothing to flatten. */
+export function handleBodyPaste(view: EditorView, _event: ClipboardEvent, slice: Slice): boolean {
+  const flattened = flattenParagraphsToSingle(view.state.schema, slice.content);
+  if (!flattened) return false;
+  view.dispatch(view.state.tr.replaceSelection(new Slice(Fragment.from(flattened), 0, 0)));
+  return true;
 }
 
 export function makeBodyEditorExtensions(placeholder: string) {

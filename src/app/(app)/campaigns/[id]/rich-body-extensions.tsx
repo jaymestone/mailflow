@@ -154,6 +154,25 @@ export function outdentLine(doc: PMNode, from: number): { from: number; to: numb
   return leading > 0 ? { from: start, to: start + leading } : null;
 }
 
+/** Normalizes pasted HTML before ProseMirror ever parses it, for
+ * `transformPastedHTML`. The editor is designed around a single paragraph
+ * (see `HardBreakOnEnter` and `docToRawString` above) — but pasted content
+ * from Gmail, Word, a webpage, or a chat UI arrives as one `<p>`/`<div>`
+ * per visual line. Left alone, each of those becomes its own paragraph
+ * node, and `docToRawString` unconditionally joins every paragraph pair
+ * with "\n\n" — so a paste doesn't just keep its line breaks, it doubles
+ * every one of them (and doubles blank lines to two blank lines), which is
+ * the "extra lines between everything" bug. Collapsing each block-to-block
+ * boundary to a single `<br>` here means the number of line breaks in the
+ * pasted result exactly matches the source, whether that's zero (tight
+ * consecutive lines) or one (an actual blank line) — nothing is invented,
+ * nothing is doubled. */
+export function normalizePastedHtml(html: string): string {
+  return html
+    .replace(/<\/(p|div|h[1-6])>\s*<(p|div|h[1-6])(?:\s[^>]*)?>/gi, "<br>")
+    .replace(/<\/?(p|div|h[1-6])(?:\s[^>]*)?>/gi, "");
+}
+
 export function makeBodyEditorExtensions(placeholder: string) {
   return [
     Document,

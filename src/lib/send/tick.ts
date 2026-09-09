@@ -13,12 +13,22 @@ import { formatFromAddress, getAccessToken, sendGmailMessage } from "@/lib/gmail
 // step-1 send right after enrolling a new campaign) and firing all N sends
 // back-to-back with nothing but network latency between them. That's a real
 // burst-sending pattern, risky from a personal/Workspace Gmail account
-// rather than dedicated ESP infrastructure. With the send window covering
-// ~100+ ticks a day at the usual 5-minute cron cadence, a small per-tick
-// cap still comfortably reaches the daily caps (10/tick × 100+ ticks
-// dwarfs the ~150/account/day ceiling) while spreading any large batch of
-// simultaneously-due contacts out over hours instead of seconds.
-const DEFAULT_BATCH_LIMIT = 10;
+// rather than dedicated ESP infrastructure.
+//
+// This is a GLOBAL cap per tick, shared across every account and every
+// active campaign combined, not per account — worth remembering next time
+// this number needs revisiting. The real cron cadence is 15 minutes
+// (confirmed directly against cron-job.org's own run history, not assumed —
+// an earlier version of this comment claimed "5-minute cadence, 100+
+// ticks/day," which was simply wrong and had gone unnoticed because 10/tick
+// was comfortably under even the true, lower ceiling). Within the Mon–Fri
+// 7am–4pm Denver send window, 15-minute ticks give ~36 ticks/day, so
+// 50/tick caps total system throughput around 1,800/day — enough headroom
+// once every account is healthy and ramped to reach several hundred/day
+// each without the tick limit becoming the bottleneck (raised from 10 to
+// 50 on 2026-09-09 alongside extending every account's ramp schedule to a
+// 300/day top tier).
+const DEFAULT_BATCH_LIMIT = 50;
 
 type DueMember = {
   campaign_member_id: string;

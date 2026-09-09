@@ -15,6 +15,7 @@ export type ContactFilters = {
   reply_status: string;
   never_contacted: string;
   not_active_elsewhere: string;
+  clicked_label: string;
 };
 
 export const EMPTY_CONTACT_FILTERS: ContactFilters = {
@@ -32,6 +33,7 @@ export const EMPTY_CONTACT_FILTERS: ContactFilters = {
   reply_status: "",
   never_contacted: "",
   not_active_elsewhere: "",
+  clicked_label: "",
 };
 
 const REPLY_STATUS_OPTIONS = [
@@ -177,7 +179,7 @@ export function ContactFilterFields({
       </div>
 
       <div className="flex flex-wrap items-end gap-5 border-t border-hairline pt-4">
-        <span className="pb-2 text-xs text-faint">By reply history:</span>
+        <span className="pb-2 text-xs text-faint">By reply &amp; click history:</span>
         <Field label="Campaign">
           <select
             value={filters.campaign}
@@ -221,6 +223,14 @@ export function ContactFilterFields({
           />
           Not active elsewhere
         </label>
+        <Field label="Clicked link">
+          <input
+            value={filters.clicked_label}
+            onChange={(e) => setField("clicked_label", e.target.value)}
+            placeholder="Rakish"
+            className={inputWideClass}
+          />
+        </Field>
       </div>
 
       <button

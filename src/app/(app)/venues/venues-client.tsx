@@ -61,6 +61,7 @@ export function VenuesClient({
   const [targetList, setTargetList] = useState("");
   const [moving, setMoving] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [pausing, setPausing] = useState(false);
 
   async function runSearch(f: ContactFilters) {
     setSearching(true);
@@ -149,6 +150,30 @@ export function VenuesClient({
       setAddResult(data);
       router.refresh();
     }
+  }
+
+  // Acts on whichever campaign the results are currently filtered by --
+  // the natural target when the workflow is "filter to this campaign +
+  // clicked a specific artist, then move that group somewhere new."
+  // Pausing (not deleting) their membership stops the old sequence
+  // without losing what was actually sent to them.
+  async function pauseInFilteredCampaign() {
+    if (selected.size === 0 || !filters.campaign) return;
+    const campaignName = campaigns.find((c) => c.id === filters.campaign)?.name ?? "this campaign";
+    if (
+      !confirm(
+        `Pause ${selected.size} contact${selected.size === 1 ? "" : "s"} in "${campaignName}"? They'll stop receiving that sequence, but their send/reply history is kept.`,
+      )
+    )
+      return;
+    setPausing(true);
+    await fetch(`/api/campaigns/${filters.campaign}/members`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ contactIds: [...selected], member_status: "paused" }),
+    });
+    setPausing(false);
+    runSearch(filters);
   }
 
   async function moveToList() {
@@ -303,6 +328,18 @@ export function VenuesClient({
               >
                 {adding ? "Adding…" : `Add ${selected.size} to campaign`}
               </button>
+
+              {filters.campaign && (
+                <button
+                  onClick={pauseInFilteredCampaign}
+                  disabled={pausing || selected.size === 0}
+                  className="rounded-[2px] border border-hairline px-3.5 py-2 text-xs text-muted-3 hover:border-accent hover:text-accent disabled:opacity-50"
+                >
+                  {pausing
+                    ? "Pausing…"
+                    : `Pause ${selected.size} in "${campaigns.find((c) => c.id === filters.campaign)?.name ?? "campaign"}"`}
+                </button>
+              )}
 
               <span className="mx-1 h-4 w-px bg-rule" />
 

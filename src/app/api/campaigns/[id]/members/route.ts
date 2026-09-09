@@ -44,6 +44,37 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   return NextResponse.json({ added: inserted?.length ?? 0, skippedSuppressed });
 }
 
+// Bulk-pauses (or reactivates) selected contacts' membership in this
+// campaign -- e.g. "these venues clicked Rakish's link, stop the generic
+// roster sequence for them" before enrolling them in an artist-specific
+// campaign instead. Deliberately an update, not the DELETE below: deleting
+// a campaign_members row cascades to that contact's outbound_sends for
+// this campaign (see the FK in the init migration), wiping their real send
+// history. Pausing stops all future sends for this campaign but keeps the
+// record of what was actually sent intact.
+export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  const { id: campaignId } = await params;
+  const { contactIds, member_status } = await request.json();
+
+  if (!Array.isArray(contactIds) || contactIds.length === 0) {
+    return NextResponse.json({ error: "contactIds (non-empty array) required" }, { status: 400 });
+  }
+  if (member_status !== "paused" && member_status !== "active") {
+    return NextResponse.json({ error: "member_status must be 'paused' or 'active'" }, { status: 400 });
+  }
+
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("campaign_members")
+    .update({ member_status })
+    .eq("campaign_id", campaignId)
+    .in("contact_id", contactIds)
+    .select("id");
+
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  return NextResponse.json({ updated: data?.length ?? 0 });
+}
+
 export async function DELETE(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id: campaignId } = await params;
   const { contactId } = await request.json();

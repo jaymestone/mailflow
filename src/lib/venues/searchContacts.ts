@@ -26,6 +26,12 @@ export type ContactSearchFilters = {
   reply_status?: "no_reply" | "any_reply" | string; // or a reply_category value
   never_contacted?: string; // "1" = only contacts with zero outbound sends, ever
   not_active_elsewhere?: string; // "1" = exclude anyone `active` in any campaign
+  // Contacts who clicked a link whose label contains this text (case-
+  // insensitive) -- e.g. "Rakish" matches a click on the "RAKISH" roster
+  // link. Bot/scanner clicks (see src/lib/send/botDetection.ts) never
+  // count. This is what makes "who's actually interested in artist X"
+  // answerable without waiting on a reply.
+  clicked_label?: string;
 };
 
 export type ContactRow = {
@@ -172,6 +178,7 @@ async function computeEngagementContactIds(
   if (filters.campaign || filters.reply_status) {
     tasks.push(campaignReplyContactIds(supabase, filters.campaign, filters.reply_status));
   }
+  if (filters.clicked_label) tasks.push(clickedLabelContactIds(supabase, filters.clicked_label));
   // Both of these need "every contact id" as their starting point — fetched
   // once and shared when both filters are active at once, rather than each
   // independently pulling the full contacts table.
@@ -185,6 +192,29 @@ async function computeEngagementContactIds(
 
   const sets = await Promise.all(tasks);
   return sets.reduce((acc, s) => new Set([...acc].filter((id) => s.has(id))));
+}
+
+/** Contacts who actually clicked (not just were sent) a link whose label
+ * matches `labelQuery`. Two queries rather than a single embedded/joined
+ * one, matching this file's existing style: fetch the candidate tokens for
+ * this label, then fetch which of those tokens have a real (non-bot)
+ * click, intersecting in JS. */
+async function clickedLabelContactIds(supabase: SupabaseClient, labelQuery: string): Promise<Set<string>> {
+  const { data: tokens } = await supabase.from("link_tokens").select("token, contact_id").ilike("label", `%${labelQuery}%`);
+  const candidates = (tokens ?? []).filter((t): t is { token: string; contact_id: string } => Boolean(t.contact_id));
+  if (candidates.length === 0) return new Set();
+
+  const { data: clicks } = await supabase
+    .from("link_clicks")
+    .select("token")
+    .eq("is_likely_bot", false)
+    .in(
+      "token",
+      candidates.map((c) => c.token),
+    );
+  const clickedTokens = new Set((clicks ?? []).map((c) => c.token as string));
+
+  return new Set(candidates.filter((c) => clickedTokens.has(c.token)).map((c) => c.contact_id));
 }
 
 async function segmentContactIds(supabase: SupabaseClient, segmentId: string): Promise<Set<string>> {

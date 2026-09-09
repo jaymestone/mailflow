@@ -160,7 +160,17 @@ export async function searchContacts(
           "id, first_name, last_name, email, venue, venue_type, city, state, country, list_id, geocode_status",
           { count: "exact" },
         )
-        .order("venue", { ascending: true, nullsFirst: false });
+        // A secondary sort key is required, not cosmetic: many contacts
+        // share the same venue (or a null one), and Postgres doesn't
+        // guarantee any particular order among ties. Without a fully
+        // deterministic sort, two .range() calls in the same pagination
+        // walk (see searchAllMatchingContacts) can each resolve ties
+        // differently -- confirmed live against Presenters US, where this
+        // silently skipped one contact and duplicated another across a
+        // batch boundary. `id` has no ties, so ordering by it as a
+        // tiebreaker makes every page's boundary exact and repeatable.
+        .order("venue", { ascending: true, nullsFirst: false })
+        .order("id", { ascending: true });
 
       if (filters.list) query = query.eq("list_id", filters.list);
       if (filters.country) query = query.ilike("country", filters.country);

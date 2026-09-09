@@ -297,6 +297,39 @@ export async function runReplyPollTick(supabase: SupabaseClient): Promise<ReplyT
           // cap wasn't hit) — otherwise one message that reliably fails to
           // classify would get re-fetched and re-fail on every future poll
           // forever, permanently stuck.
+          //
+          // A 404 specifically means Gmail no longer has this message at
+          // all (permanently deleted, not just moved) -- retrying can never
+          // succeed. Left alone, that's worse than the general case above:
+          // since nothing ever gets inserted into inbound_messages for it,
+          // the `existing` check never learns to skip it, so it keeps
+          // re-occupying one of this tick's MAX_NEW_MESSAGES_PER_TICK slots
+          // forever. If several such messages cluster together (confirmed
+          // live: an account reconnected after a multi-week gap had a
+          // backlog where the first 5 history entries were all permanently-
+          // deleted messages), hitBatchCap never clears and last_history_id
+          // never advances past them -- which blocks every real message
+          // behind them too, indefinitely, not just the dead ones. A stub
+          // row here is enough for `existing` to skip it next time, without
+          // pretending it was actually classified as anything.
+          if (message.includes("Gmail get message failed: 404")) {
+            // Best-effort: if even this insert fails, the message just
+            // falls back to the pre-existing (already-safe, if slower to
+            // recover from) retry-forever behavior rather than throwing out
+            // of a catch block that's supposed to isolate one message's
+            // failure from the rest of the batch.
+            await supabase
+              .from("inbound_messages")
+              .insert({
+                connected_account_id: account.id,
+                gmail_message_id: messageId,
+                from_email: "(unfetchable)",
+                subject: "(Gmail returned 404 -- message no longer exists)",
+                received_at: new Date().toISOString(),
+                message_type: "unknown",
+              })
+              .then(null, () => {});
+          }
         }
       }
 

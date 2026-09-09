@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { describe, expect, it } from "vitest";
-import { searchContacts } from "./searchContacts";
+import { searchAllMatchingContacts, searchContacts } from "./searchContacts";
 
 // Minimal stand-in covering just the query shapes this file's
 // clicked_label path actually uses: contacts (id list), link_tokens
@@ -21,9 +21,14 @@ function mockSupabase(tables: {
       inField?: string;
       inValues?: unknown[];
       eqFilters: [string, unknown][];
+      range?: [number, number];
     } = { eqFilters: [] };
     const api = {
       select() {
+        return api;
+      },
+      range(from: number, to: number) {
+        state.range = [from, to];
         return api;
       },
       ilike(field: string, value: string) {
@@ -62,13 +67,49 @@ function mockSupabase(tables: {
           const set = new Set(state.inValues);
           data = data.filter((r) => set.has((r as Record<string, unknown>)[state.inField!]));
         }
-        resolve({ data, error: null, count: data.length });
+        const fullCount = data.length;
+        if (state.range) {
+          const [from, to] = state.range;
+          data = data.slice(from, to + 1);
+        }
+        resolve({ data, error: null, count: fullCount });
       },
     };
     return api;
   }
   return { from: (table: string) => builder(table) } as unknown as SupabaseClient;
 }
+
+describe("searchAllMatchingContacts", () => {
+  it("pages through every matching contact, not just the first batch", () => {
+    // 25 contacts, well past a batch size of 10 -- this is the exact shape
+    // of the bug: a single capped fetch would silently drop everyone past
+    // the cap (as it did in production with a 500-row limit against a
+    // 4,283-contact list). Paginating in batches of 10 should still
+    // recover all 25.
+    const allContacts = Array.from({ length: 25 }, (_, i) => ({ id: `c${i}` }));
+    const supabase = mockSupabase({ contacts: allContacts });
+
+    return searchAllMatchingContacts(supabase, {}, 10).then((result) => {
+      expect(result).toHaveLength(25);
+      expect(result.map((c) => c.id)).toEqual(allContacts.map((c) => c.id));
+    });
+  });
+
+  it("stops after exactly one batch when the result set is smaller than the batch size", () => {
+    const supabase = mockSupabase({ contacts: [{ id: "c1" }, { id: "c2" }] });
+    return searchAllMatchingContacts(supabase, {}, 10).then((result) => {
+      expect(result).toHaveLength(2);
+    });
+  });
+
+  it("returns an empty array, not an infinite loop, when nothing matches", () => {
+    const supabase = mockSupabase({ contacts: [] });
+    return searchAllMatchingContacts(supabase, {}, 10).then((result) => {
+      expect(result).toEqual([]);
+    });
+  });
+});
 
 describe("searchContacts clicked_label filter", () => {
   it("returns only contacts with a real (non-bot) click on a matching-label link", () => {

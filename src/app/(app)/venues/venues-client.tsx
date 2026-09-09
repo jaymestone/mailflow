@@ -152,6 +152,34 @@ export function VenuesClient({
     }
   }
 
+  // This page's search preview is capped (currently 500 rows) so the table
+  // stays fast to render, but `results.count` is the true, uncapped total
+  // -- when it's bigger than what's shown, the checkbox selection above
+  // can never reach everyone who actually matches. This sends the filters
+  // themselves instead, so the server enrolls every real match.
+  async function addAllMatchingToCampaign() {
+    if (!results || !targetCampaign || results.count == null) return;
+    if (
+      !confirm(
+        `Add all ${results.count.toLocaleString()} contacts matching these filters to this campaign? This isn't limited to the ${results.rows.length} shown above.`,
+      )
+    )
+      return;
+    setAdding(true);
+    const payload = Object.fromEntries(Object.entries(filters).filter(([, v]) => v.trim() !== ""));
+    const res = await fetch(`/api/campaigns/${targetCampaign}/members`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filters: payload }),
+    });
+    const data = await res.json();
+    setAdding(false);
+    if (res.ok) {
+      setAddResult(data);
+      router.refresh();
+    }
+  }
+
   // Acts on whichever campaign the results are currently filtered by --
   // the natural target when the workflow is "filter to this campaign +
   // clicked a specific artist, then move that group somewhere new."
@@ -326,8 +354,17 @@ export function VenuesClient({
                 disabled={adding || selected.size === 0 || !targetCampaign}
                 className="rounded-[2px] bg-ink px-3.5 py-2 text-xs font-semibold text-surface disabled:opacity-50"
               >
-                {adding ? "Adding…" : `Add ${selected.size} to campaign`}
+                {adding ? "Adding…" : `Add ${selected.size} shown to campaign`}
               </button>
+              {results.count != null && results.count > results.rows.length && !results.isRadiusMode && (
+                <button
+                  onClick={addAllMatchingToCampaign}
+                  disabled={adding || !targetCampaign}
+                  className="rounded-[2px] border border-accent bg-accent/10 px-3.5 py-2 text-xs font-semibold text-accent disabled:opacity-50"
+                >
+                  {adding ? "Adding…" : `Add all ${results.count.toLocaleString()} matching`}
+                </button>
+              )}
 
               {filters.campaign && (
                 <button

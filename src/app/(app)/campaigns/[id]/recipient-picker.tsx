@@ -117,6 +117,36 @@ export function RecipientPicker({
     }
   }
 
+  // The preview table only ever fetches/shows up to PREVIEW_LIMIT rows
+  // (see the /search route) so it stays fast and scrollable -- but that's
+  // a display cap, not a real ceiling on who can be enrolled. This sends
+  // the filters themselves rather than the previewed row ids, so the
+  // server can enroll every actual match, however many that is.
+  async function addAllMatching() {
+    if (!results || results.totalMatched == null) return;
+    if (
+      !confirm(
+        `Add all ${results.totalMatched.toLocaleString()} contacts matching these filters to this campaign? This isn't limited to what's shown below.`,
+      )
+    )
+      return;
+    setAdding(true);
+    const payload = Object.fromEntries(Object.entries(filters).filter(([, v]) => v.trim() !== ""));
+    const res = await fetch(`/api/campaigns/${campaignId}/members`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filters: payload }),
+    });
+    const data = await res.json();
+    setAdding(false);
+    if (res.ok) {
+      setAddResult(data);
+      setResults(null);
+      setSelected(new Set());
+      router.refresh();
+    }
+  }
+
   async function saveAsSegment() {
     if (selected.size === 0) return;
     const name = prompt("Save this selection as a segment named:");
@@ -163,7 +193,9 @@ export function RecipientPicker({
           {results.radiusNote && <p className="text-xs text-muted-3">{results.radiusNote}</p>}
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-3">
             <span>
-              {results.rows.length} eligible to add
+              {results.totalMatched != null && results.totalMatched > results.fetchedCount
+                ? `${results.totalMatched.toLocaleString()} total matches (previewing the first ${results.fetchedCount.toLocaleString()})`
+                : `${results.rows.length} eligible to add`}
               {results.excludedExisting > 0 && ` · ${results.excludedExisting} already in this campaign`}
               {results.excludedSuppressed > 0 && ` · ${results.excludedSuppressed} suppressed`}
               {results.radiusCapped && " · nearest 500 shown"}
@@ -174,6 +206,14 @@ export function RecipientPicker({
               </button>
             )}
           </div>
+          {results.totalMatched != null && results.totalMatched > results.fetchedCount && !results.isRadiusMode && (
+            <p className="mt-1.5 rounded-[2px] border border-accent/40 bg-accent/5 px-3 py-2 text-xs text-ink-soft">
+              This preview only shows the first {results.fetchedCount.toLocaleString()} matches, but{" "}
+              <strong>{results.totalMatched.toLocaleString()} contacts</strong> actually match these filters. Use{" "}
+              <strong>&quot;Add all {results.totalMatched.toLocaleString()} matching&quot;</strong> below to enroll
+              everyone, not just what&apos;s shown here.
+            </p>
+          )}
 
           {results.rows.length > 0 && (
             <>
@@ -219,14 +259,23 @@ export function RecipientPicker({
                   when added, even beyond what&apos;s shown here.
                 </p>
               )}
-              <div className="mt-4 flex items-center gap-3">
+              <div className="mt-4 flex flex-wrap items-center gap-3">
                 <button
                   onClick={addSelected}
                   disabled={adding || selected.size === 0}
                   className="rounded-[2px] bg-ink px-4 py-2 text-xs font-semibold text-surface disabled:opacity-50"
                 >
-                  {adding ? "Adding…" : `Add ${selected.size} to campaign`}
+                  {adding ? "Adding…" : `Add ${selected.size} shown to campaign`}
                 </button>
+                {results.totalMatched != null && results.totalMatched > results.fetchedCount && !results.isRadiusMode && (
+                  <button
+                    onClick={addAllMatching}
+                    disabled={adding}
+                    className="rounded-[2px] border border-accent bg-accent/10 px-4 py-2 text-xs font-semibold text-accent disabled:opacity-50"
+                  >
+                    {adding ? "Adding…" : `Add all ${results.totalMatched.toLocaleString()} matching`}
+                  </button>
+                )}
                 <button
                   onClick={saveAsSegment}
                   disabled={savingSegment || selected.size === 0}

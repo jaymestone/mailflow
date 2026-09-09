@@ -57,6 +57,41 @@ export type ContactSearchResult = {
 };
 
 /**
+ * Fetches *every* contact matching `filters`, not just a preview page —
+ * for actually enrolling a campaign's full recipient list rather than
+ * showing a scrollable sample. Not used for radius search: that's paginated
+ * via a PostGIS RPC with its own inherent (and already-communicated, see
+ * `radiusCapped`) result cap, a genuinely different situation from a plain
+ * list/segment filter with no reason to ever be capped. PostgREST defaults
+ * to capping any single request around 1000 rows server-side regardless of
+ * what's asked for, so this pages through in batches rather than trusting
+ * one big `.range()` call to actually return everything — the exact bug
+ * this function exists to avoid repeating (a fixed single-call limit of
+ * 500 elsewhere silently dropped every contact past it, with nothing in
+ * the UI to say so).
+ */
+export async function searchAllMatchingContacts(
+  supabase: SupabaseClient,
+  filters: ContactSearchFilters,
+  batchSize = 1000,
+): Promise<ContactRow[]> {
+  if (filters.near) {
+    const result = await searchContacts(supabase, filters);
+    return result.rows;
+  }
+
+  const all: ContactRow[] = [];
+  let from = 0;
+  for (;;) {
+    const result = await searchContacts(supabase, filters, { from, to: from + batchSize - 1 });
+    all.push(...result.rows);
+    if (result.rows.length < batchSize) break;
+    from += batchSize;
+  }
+  return all;
+}
+
+/**
  * Shared by the /venues browser and the campaign recipient picker so both
  * support the same filters (including radius and reply-history search)
  * without drifting.

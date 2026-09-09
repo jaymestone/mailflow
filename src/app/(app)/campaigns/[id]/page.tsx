@@ -23,6 +23,10 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
     { data: campaigns },
     { data: members },
     { count: memberCount },
+    { data: allMemberStatuses },
+    { data: sentSteps },
+    { data: replies },
+    { data: clicks },
   ] = await Promise.all([
     supabase.from("campaign_templates").select("*").eq("campaign_id", id).order("step_number"),
     supabase.from("saved_templates").select("id, name, subject, body").order("name"),
@@ -36,6 +40,32 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
       .order("added_at", { ascending: false })
       .limit(MEMBERS_DISPLAY_CAP),
     supabase.from("campaign_members").select("id", { count: "exact", head: true }).eq("campaign_id", id),
+    // Every member's status, across the whole campaign -- not just the
+    // MEMBERS_DISPLAY_CAP page above. A big campaign's true status mix
+    // (thousands of members) was previously being silently computed from
+    // only the 200 most-recently-added rows, which for a several-thousand-
+    // member campaign is not remotely representative.
+    supabase.from("campaign_members").select("member_status").eq("campaign_id", id),
+    // Every actual send for this campaign (status='sent'), for the
+    // per-step funnel below -- "how many have received step 1 / step 2 /
+    // etc." Only the step number is fetched; grouped in JS.
+    supabase.from("outbound_sends").select("step_number").eq("campaign_id", id).eq("status", "sent"),
+    supabase
+      .from("inbound_messages")
+      .select("classification_category")
+      .eq("matched_campaign_id", id)
+      .eq("message_type", "reply"),
+    // Joined via link_tokens' own campaign_id rather than fetching every
+    // token for this campaign and passing thousands of ids through .in() --
+    // the same payload-size mistake already fixed once elsewhere in this
+    // app. Real (non-bot) clicks only; a campaign this size realistically
+    // has dozens-to-low-hundreds of clicks, not thousands, so grouping by
+    // label and by contact in JS afterward is cheap.
+    supabase
+      .from("link_clicks")
+      .select("token, link_tokens!inner(label, contact_id, campaign_id)")
+      .eq("link_tokens.campaign_id", id)
+      .eq("is_likely_bot", false),
   ]);
 
   const segmentOptions = (segments ?? []).map((s) => ({
@@ -45,9 +75,33 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
   }));
 
   const statusCounts: Record<string, number> = {};
-  for (const m of members ?? []) {
+  for (const m of allMemberStatuses ?? []) {
     statusCounts[m.member_status] = (statusCounts[m.member_status] ?? 0) + 1;
   }
+
+  const sentByStep: Record<number, number> = {};
+  for (const s of sentSteps ?? []) {
+    sentByStep[s.step_number] = (sentByStep[s.step_number] ?? 0) + 1;
+  }
+
+  const replyCounts: Record<string, number> = {};
+  for (const r of replies ?? []) {
+    const category = r.classification_category ?? "uncategorized";
+    replyCounts[category] = (replyCounts[category] ?? 0) + 1;
+  }
+
+  const clickRows = (clicks ?? []).map((c) => {
+    const linkToken = Array.isArray(c.link_tokens) ? c.link_tokens[0] : c.link_tokens;
+    return { label: linkToken?.label ?? "Unknown link", contactId: linkToken?.contact_id ?? null };
+  });
+  const clicksByLabel: Record<string, number> = {};
+  for (const c of clickRows) {
+    clicksByLabel[c.label] = (clicksByLabel[c.label] ?? 0) + 1;
+  }
+  const uniqueClickers = new Set(clickRows.map((c) => c.contactId).filter(Boolean)).size;
+  const topClickedLabels = Object.entries(clicksByLabel)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8);
 
   return (
     <div>
@@ -79,6 +133,79 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
       </div>
 
       <SendControls />
+
+      <section className="mt-9 rounded-[3px] border border-hairline bg-surface p-5">
+        <h2 className="font-display text-[21px] font-medium text-ink">Status</h2>
+
+        <div className="mt-4 grid grid-cols-2 gap-x-8 gap-y-5 sm:grid-cols-4">
+          <Stat label="Total recipients" value={memberCount ?? 0} />
+          <Stat label="Active" value={statusCounts.active ?? 0} />
+          <Stat label="Paused" value={statusCounts.paused ?? 0} />
+          <Stat label="Completed" value={statusCounts.completed ?? 0} />
+        </div>
+
+        {(templates ?? []).length > 0 && (
+          <div className="mt-6">
+            <h3 className="text-[10px] tracking-wide text-faint uppercase">Sent, by step</h3>
+            <div className="mt-2 flex flex-wrap gap-x-8 gap-y-2">
+              {(templates ?? []).map((t) => (
+                <div key={t.step_number} className="text-[13px]">
+                  <span className="text-ink">{sentByStep[t.step_number] ?? 0}</span>
+                  <span className="text-muted-3"> sent step {t.step_number}</span>
+                  <span className="ml-1.5 text-faint-3">
+                    ({(memberCount ?? 0) - (sentByStep[t.step_number] ?? 0)} not sent yet — includes anyone paused
+                    or not yet due, not only what's queued)
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="mt-6">
+          <h3 className="text-[10px] tracking-wide text-faint uppercase">Replies</h3>
+          {Object.keys(replyCounts).length > 0 ? (
+            <div className="mt-2 flex flex-wrap gap-x-6 gap-y-1.5 text-[13px]">
+              {Object.entries(replyCounts)
+                .sort((a, b) => b[1] - a[1])
+                .map(([category, count]) => (
+                  <span key={category}>
+                    <span className="text-ink">{count}</span>{" "}
+                    <span className="text-muted-3">{category.replace(/_/g, " ")}</span>
+                  </span>
+                ))}
+            </div>
+          ) : (
+            <p className="mt-1.5 text-[13px] text-faint-3">No replies yet.</p>
+          )}
+        </div>
+
+        <div className="mt-6">
+          <h3 className="text-[10px] tracking-wide text-faint uppercase">Link clicks</h3>
+          {clickRows.length > 0 ? (
+            <>
+              <p className="mt-1.5 text-[13px] text-ink-soft">
+                <span className="text-ink">{clickRows.length}</span> clicks from{" "}
+                <span className="text-ink">{uniqueClickers}</span> contact{uniqueClickers === 1 ? "" : "s"}
+              </p>
+              <div className="mt-2 flex flex-wrap gap-x-6 gap-y-1.5 text-[13px]">
+                {topClickedLabels.map(([label, count]) => (
+                  <span key={label}>
+                    <span className="text-ink">{count}</span> <span className="text-muted-3">{label}</span>
+                  </span>
+                ))}
+              </div>
+            </>
+          ) : (
+            <p className="mt-1.5 text-[13px] text-faint-3">No clicks yet.</p>
+          )}
+          <p className="mt-2 text-[11px] text-faint-3">
+            No open-rate tracking here on purpose — pixel-based open tracking has gotten unreliable across major
+            clients (Apple Mail and Gmail both pre-fetch images regardless of whether anyone actually opened the
+            email), so it mostly measures noise. Clicks are a real signal; opens mostly aren&apos;t anymore.
+          </p>
+        </div>
+      </section>
 
       <section className="mt-11">
         <h2 className="font-display text-[21px] font-medium text-ink">Sequence</h2>
@@ -148,6 +275,15 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
           )}
         </div>
       </section>
+    </div>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: number }) {
+  return (
+    <div>
+      <div className="font-display text-[26px] font-medium text-ink">{value.toLocaleString()}</div>
+      <div className="text-[10px] tracking-wide text-faint uppercase">{label}</div>
     </div>
   );
 }

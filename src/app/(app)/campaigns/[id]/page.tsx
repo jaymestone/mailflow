@@ -27,6 +27,7 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
     { data: sentSteps },
     { data: replies },
     { data: clicks },
+    { data: sendEngineHealth },
   ] = await Promise.all([
     supabase.from("campaign_templates").select("*").eq("campaign_id", id).order("step_number"),
     supabase.from("saved_templates").select("id, name, subject, body").order("name"),
@@ -66,6 +67,10 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
       .select("token, link_tokens!inner(label, contact_id, campaign_id)")
       .eq("link_tokens.campaign_id", id)
       .eq("is_likely_bot", false),
+    // The send engine's own heartbeat -- account-wide, not specific to this
+    // campaign (there's only one engine), shown so "Send now" doesn't read
+    // as the only thing making a campaign send. See send-controls.tsx.
+    supabase.from("cron_health").select("last_run_at").eq("job_name", "send-engine-tick").maybeSingle(),
   ]);
 
   const segmentOptions = (segments ?? []).map((s) => ({
@@ -132,7 +137,7 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
         </div>
       </div>
 
-      <SendControls />
+      <SendControls lastEngineRunAt={sendEngineHealth?.last_run_at ?? null} />
 
       <section className="mt-9 rounded-[3px] border border-hairline bg-surface p-5">
         <h2 className="font-display text-[21px] font-medium text-ink">Status</h2>

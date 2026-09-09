@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { ContactHistoryToggle } from "../../_shared/contact-history";
+import { LinkClicksToggle } from "../../_shared/link-clicks";
 
 type Contact = {
   id: string;
@@ -174,8 +175,9 @@ export function ContactDetailClient({
 
         <div className="mt-9">
           <h2 className="text-[10px] tracking-wide text-faint uppercase">Campaign history</h2>
-          <div className="mt-2">
+          <div className="mt-2 flex flex-col items-start gap-1.5">
             <ContactHistoryToggle contactId={contact.id} />
+            <LinkClicksToggle contactId={contact.id} />
           </div>
         </div>
       </div>

@@ -9,6 +9,7 @@ import {
   type ContactFilters,
 } from "../_shared/contact-filter-fields";
 import { ContactHistoryToggle } from "../_shared/contact-history";
+import { LinkClicksToggle } from "../_shared/link-clicks";
 
 type ContactRow = {
   id: string;
@@ -259,7 +260,10 @@ export function VenuesClient({
                         {[r.city, r.state].filter(Boolean).join(", ") || r.country || "—"}
                       </td>
                       <td className="px-3 py-2">
-                        <ContactHistoryToggle contactId={r.id} />
+                        <div className="flex flex-col items-start gap-1">
+                          <ContactHistoryToggle contactId={r.id} />
+                          <LinkClicksToggle contactId={r.id} />
+                        </div>
                       </td>
                     </tr>
                   ))}

@@ -4,8 +4,11 @@ import { type NextRequest, NextResponse } from "next/server";
 // /api/cron/* authenticates via a shared secret (checked in the route
 // itself) since cron callers have no user session. /about is the public
 // page shown to Google's OAuth verification reviewers and anyone else
-// checking what this app is before it's behind a login.
-const PUBLIC_PATHS = ["/login", "/auth/callback", "/api/cron", "/about"];
+// checking what this app is before it's behind a login. /api/r/* is the
+// click-tracking redirect a real (external, logged-out) campaign recipient
+// hits when they click a link in an email -- without it public, every
+// click would bounce to /login instead of the artist's actual page.
+const PUBLIC_PATHS = ["/login", "/auth/callback", "/api/cron", "/about", "/api/r"];
 
 export async function proxy(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request });

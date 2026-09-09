@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { randomBytes, randomUUID } from "crypto";
 import { effectiveCap, pickNextAccount, type SendAccount } from "./roundRobin";
 import { buildFollowUpContent } from "./buildFollowUp";
+import { injectClickTracking } from "./clickTracking";
 import { findUnresolvedTokens, resolveTemplate } from "@/lib/templates/resolve";
 import { wrapEmailHtml } from "@/lib/templates/emailHtml";
 import { formatFromAddress, getAccessToken, sendGmailMessage } from "@/lib/gmail/client";
@@ -251,6 +252,16 @@ export async function runSendTick(
         continue;
       }
 
+      // Rewrites this step's own links (e.g. each artist's page) to
+      // click-tracking redirects — but only this step's, not the quoted
+      // step-1 body buildFollowUpContent pulls in below, which was already
+      // rewritten with its own tokens back when step 1 itself was sent.
+      const trackedBody = await injectClickTracking(supabase, body, {
+        contactId: member.contact_id,
+        campaignId: member.campaign_id,
+        stepNumber: member.next_step,
+      });
+
       // Follow-up steps (2+) default their subject to "Re: [step 1's
       // subject]" when left blank, and always get step 1's original email
       // quoted underneath — always step 1 specifically, never the
@@ -259,7 +270,7 @@ export async function runSendTick(
       // 5322-correct ancestor chain regardless of which step is shown.
       const { finalSubject, finalBody, htmlInner, inReplyTo, references, threadId } = buildFollowUpContent({
         subject,
-        body,
+        body: trackedBody,
         nextStep: member.next_step,
         chain,
         currentAccountId: picked.account.id,

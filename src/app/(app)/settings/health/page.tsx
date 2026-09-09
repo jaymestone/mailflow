@@ -14,7 +14,7 @@ function minutesSince(dateStr: string): number {
 export default async function HealthPage() {
   const supabase = await createClient();
 
-  const [{ data: cronHealth }, { data: accounts }, { data: recentFailures }] = await Promise.all([
+  const [{ data: cronHealth }, { data: accounts }, { data: recentFailures }, { data: sendLock }] = await Promise.all([
     supabase.from("cron_health").select("job_name, last_run_at, last_result"),
     supabase.from("connected_accounts").select("id, email_address, status, last_error"),
     supabase
@@ -23,7 +23,14 @@ export default async function HealthPage() {
       .eq("status", "failed")
       .order("created_at", { ascending: false })
       .limit(20),
+    supabase.from("send_lock").select("locked_at").eq("id", true).maybeSingle(),
   ]);
+
+  // Mirrors the 5-minute self-expiry try_acquire_send_lock() itself applies
+  // (see the send_lock migration) -- a lock older than that isn't really
+  // "held" anymore, the next tick will silently reclaim it on its own.
+  const lockMinutesHeld = sendLock?.locked_at ? minutesSince(sendLock.locked_at) : null;
+  const lockActuallyHeld = lockMinutesHeld !== null && lockMinutesHeld < 5;
 
   const domains = [...new Set((accounts ?? []).map((a) => a.email_address.split("@")[1]))];
 
@@ -68,6 +75,19 @@ export default async function HealthPage() {
             </tbody>
           </table>
         </div>
+      </section>
+
+      <section className="mt-9">
+        <h2 className="font-display text-[21px] font-medium text-ink">Send lock</h2>
+        <p className="mt-1.5 text-pretty text-sm text-muted">
+          Stops two send ticks from running at once. Self-clears after 5 minutes if a tick ever crashes without
+          releasing it, so it can&apos;t get stuck holding sending open indefinitely the way it once could.
+        </p>
+        <p className={`mt-2 text-sm ${lockActuallyHeld ? "text-error" : "text-success"}`}>
+          {lockActuallyHeld
+            ? `Held — a tick has been running for ${Math.round(lockMinutesHeld!)} minute${Math.round(lockMinutesHeld!) === 1 ? "" : "s"}. Normal if brief; will self-release automatically at 5 minutes either way.`
+            : "Free — nothing currently holding it."}
+        </p>
       </section>
 
       <section className="mt-9">

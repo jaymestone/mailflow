@@ -1,4 +1,4 @@
-import { escapeHtml, formatQuoteAttribution, linkifyMarkdown, wrapInGmailQuote } from "@/lib/templates/emailHtml";
+import { escapeHtml, formatQuoteAttribution, markdownToEmailHtml, wrapInGmailQuote } from "@/lib/templates/emailHtml";
 
 type ChainAccount = { email_address: string; display_name: string | null };
 
@@ -48,7 +48,7 @@ export function buildFollowUpContent(opts: {
 }): FollowUpContent {
   let finalSubject = opts.subject;
   let finalBody = opts.body;
-  let htmlInner = linkifyMarkdown(opts.body).replace(/\n/g, "<br>");
+  let htmlInner = markdownToEmailHtml(opts.body);
   let inReplyTo: string | undefined;
   let references: string | undefined;
   let threadId: string | undefined;
@@ -77,7 +77,7 @@ export function buildFollowUpContent(opts: {
         .join("\n");
       finalBody = `${finalBody}\n\n${attribution}\n${quotedPlain}`;
 
-      const quotedHtmlInner = linkifyMarkdown(original.body_resolved).replace(/\n/g, "<br>");
+      const quotedHtmlInner = markdownToEmailHtml(original.body_resolved);
       htmlInner = `${htmlInner}<br><br>` + wrapInGmailQuote(`${escapeHtml(attribution)}<br>${quotedHtmlInner}`);
     }
 

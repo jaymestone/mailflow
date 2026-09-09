@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
 import { resolveMergeFields, resolveTemplate } from "@/lib/templates/resolve";
-import { linkifyMarkdown, wrapInGmailQuote } from "@/lib/templates/emailHtml";
+import { linkifyMarkdown, markdownToEmailHtml, wrapInGmailQuote } from "@/lib/templates/emailHtml";
 import {
   PREVIEW_CONTACT,
   makeBodyEditorExtensions,
@@ -575,7 +575,7 @@ function StepForm({
             dangerouslySetInnerHTML={{
               __html: wrapInGmailQuote(
                 `On [send date], at [send time], [your sending address] wrote:<br>` +
-                  linkifyMarkdown(resolveTemplate(firstStepTemplate.body, PREVIEW_CONTACT)).replace(/\n/g, "<br>"),
+                  markdownToEmailHtml(resolveTemplate(firstStepTemplate.body, PREVIEW_CONTACT)),
               ),
             }}
           />

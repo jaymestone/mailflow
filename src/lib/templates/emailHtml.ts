@@ -37,15 +37,48 @@ export function linkifyMarkdown(text: string): string {
  * "designed" look that signals a templated/automated send rather than
  * something someone actually typed. Leaving it unset lets the size
  * inherit the recipient's own client default, the way a genuine plain
- * email does. */
+ * email does.
+ *
+ * Deliberately no `white-space:pre-wrap` here (removed 2026-09-10) — see
+ * markdownToEmailHtml below for why that turned out to be unsafe. */
 export function wrapEmailHtml(innerHtml: string): string {
-  return `<div style="white-space:pre-wrap;font-family:Arial,Helvetica,sans-serif;line-height:1.5;color:#000000;">${innerHtml}</div>`;
+  return `<div style="font-family:Arial,Helvetica,sans-serif;line-height:1.5;color:#000000;">${innerHtml}</div>`;
 }
 
-/** Convenience for the simple case (no quote block involved): escapes,
- * linkifies, and wraps a single plain-text string in one step. */
+/** Converts a run of 2+ spaces into alternating literal-space/&nbsp; pairs
+ * so multi-space runs (e.g. an indent, or a stray double space before a
+ * line break) survive normal HTML whitespace collapsing without relying on
+ * `white-space:pre-wrap` on the container. &nbsp; is ordinary content, not
+ * whitespace formatting, so unlike pre-wrap it survives an email client
+ * re-serializing the HTML (e.g. when quoting it into a reply) intact. */
+function preserveRepeatedSpaces(html: string): string {
+  return html.replace(/ {2,}/g, (run) => "&nbsp;".repeat(run.length - 1) + " ");
+}
+
+/** The one function every call site should use to turn a resolved
+ * template string into email-ready HTML — escapes, linkifies markdown-lite
+ * markup, preserves multi-space runs, and converts newlines to <br>, in an
+ * order where each step's output is safe input for the next.
+ *
+ * This replaces what used to be `linkifyMarkdown(text).replace(/\n/g,
+ * "<br>")` duplicated at each call site, paired with `white-space:pre-wrap`
+ * on the wrapping div to preserve indentation. That combination is unsafe:
+ * confirmed live from a recipient's actual reply ("Show original" raw
+ * source), Gmail re-serializes the quoted HTML when building a reply and
+ * doesn't preserve the original's byte-for-byte insignificant whitespace
+ * between tags — under pre-wrap, Gmail's own newly-inserted formatting
+ * newlines become visible line breaks too, doubling every line in the
+ * quoted portion on top of the deliberate <br> tags. This never showed up
+ * on a fresh, un-replied-to send, only once something got quoted — which
+ * is exactly the "not all, but some replies" pattern that surfaced it. */
+export function markdownToEmailHtml(text: string): string {
+  return preserveRepeatedSpaces(linkifyMarkdown(text)).replace(/\n/g, "<br>");
+}
+
+/** Convenience for the simple case (no quote block involved): resolves and
+ * wraps a single plain-text string in one step. */
 export function renderPlainTextToHtml(text: string): string {
-  return wrapEmailHtml(linkifyMarkdown(text).replace(/\n/g, "<br>"));
+  return wrapEmailHtml(markdownToEmailHtml(text));
 }
 
 /** Wraps inner HTML in a quoted-reply visual style — a colored left border

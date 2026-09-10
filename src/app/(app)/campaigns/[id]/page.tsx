@@ -23,8 +23,9 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
     { data: campaigns },
     { data: members },
     { count: memberCount },
-    { data: allMemberStatuses },
-    { data: sentSteps },
+    { count: activeCount },
+    { count: pausedCount },
+    { count: completedCount },
     { data: replies },
     { data: clicks },
     { data: sendEngineHealth },
@@ -41,16 +42,26 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
       .order("added_at", { ascending: false })
       .limit(MEMBERS_DISPLAY_CAP),
     supabase.from("campaign_members").select("id", { count: "exact", head: true }).eq("campaign_id", id),
-    // Every member's status, across the whole campaign -- not just the
-    // MEMBERS_DISPLAY_CAP page above. A big campaign's true status mix
-    // (thousands of members) was previously being silently computed from
-    // only the 200 most-recently-added rows, which for a several-thousand-
-    // member campaign is not remotely representative.
-    supabase.from("campaign_members").select("member_status").eq("campaign_id", id),
-    // Every actual send for this campaign (status='sent'), for the
-    // per-step funnel below -- "how many have received step 1 / step 2 /
-    // etc." Only the step number is fetched; grouped in JS.
-    supabase.from("outbound_sends").select("step_number").eq("campaign_id", id).eq("status", "sent"),
+    // Per-status counts via real COUNT queries, not fetch-every-row-and-
+    // count-in-JS -- the latter silently undercounts past Supabase's
+    // default 1000-row response cap once a campaign has more than 1000
+    // members (confirmed live: a 4,261-member campaign showed exactly
+    // 1,000 "active" and 0 paused/completed, rather than the true mix).
+    supabase
+      .from("campaign_members")
+      .select("id", { count: "exact", head: true })
+      .eq("campaign_id", id)
+      .eq("member_status", "active"),
+    supabase
+      .from("campaign_members")
+      .select("id", { count: "exact", head: true })
+      .eq("campaign_id", id)
+      .eq("member_status", "paused"),
+    supabase
+      .from("campaign_members")
+      .select("id", { count: "exact", head: true })
+      .eq("campaign_id", id)
+      .eq("member_status", "completed"),
     supabase
       .from("inbound_messages")
       .select("classification_category")
@@ -79,15 +90,24 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
     count: Array.isArray(s.saved_segment_contacts) ? (s.saved_segment_contacts[0]?.count ?? 0) : 0,
   }));
 
-  const statusCounts: Record<string, number> = {};
-  for (const m of allMemberStatuses ?? []) {
-    statusCounts[m.member_status] = (statusCounts[m.member_status] ?? 0) + 1;
-  }
+  const statusCounts = { active: activeCount ?? 0, paused: pausedCount ?? 0, completed: completedCount ?? 0 };
 
+  // Same fix as the status counts above, applied per step: a real COUNT
+  // per step_number rather than fetching every outbound_sends row for the
+  // campaign and grouping in JS, which would hit the same 1000-row cap
+  // once a campaign's total sends across all steps pass that mark.
   const sentByStep: Record<number, number> = {};
-  for (const s of sentSteps ?? []) {
-    sentByStep[s.step_number] = (sentByStep[s.step_number] ?? 0) + 1;
-  }
+  await Promise.all(
+    (templates ?? []).map(async (t) => {
+      const { count } = await supabase
+        .from("outbound_sends")
+        .select("id", { count: "exact", head: true })
+        .eq("campaign_id", id)
+        .eq("status", "sent")
+        .eq("step_number", t.step_number);
+      sentByStep[t.step_number] = count ?? 0;
+    }),
+  );
 
   const replyCounts: Record<string, number> = {};
   for (const r of replies ?? []) {

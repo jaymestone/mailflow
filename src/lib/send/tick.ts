@@ -339,14 +339,16 @@ export async function runSendTick(
           })
           .eq("id", member.campaign_member_id);
 
-        const newCount = (sentCounts.get(picked.account.id) ?? 0) + 1;
-        sentCounts.set(picked.account.id, newCount);
-        await supabase
-          .from("send_counters")
-          .upsert(
-            { connected_account_id: picked.account.id, date: todayDate, sent_count: newCount },
-            { onConflict: "connected_account_id,date" },
-          );
+        // Atomic DB-side increment (see migration 00000000000026) rather
+        // than upserting a value computed from the in-memory snapshot --
+        // that pattern silently lost real sends whenever the snapshot fell
+        // behind reality. The returned count is authoritative, so it
+        // replaces (not just increments) the local map entry.
+        const { data: newCount } = await supabase.rpc("increment_send_counter", {
+          p_account_id: picked.account.id,
+          p_date: todayDate,
+        });
+        sentCounts.set(picked.account.id, newCount ?? (sentCounts.get(picked.account.id) ?? 0) + 1);
 
         cursor = picked.nextCursor;
         domainsSentThisTick.add(member.recipient_domain);

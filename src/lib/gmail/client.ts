@@ -2,15 +2,28 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { randomBytes } from "crypto";
 import { refreshAccessToken } from "@/lib/oauth/google";
 
+/** Reads the stored refresh token via a couple of short retries before
+ * giving up -- a bare empty/errored response here used to be treated as
+ * "this account has no token," which turned out to also catch a plain
+ * transient Supabase/Vault read hiccup and permanently bench a perfectly
+ * healthy account. A real, permanently-missing token still ends up
+ * throwing the same error after retries exhaust; a one-off blip now just
+ * self-heals within this same call instead. */
+async function fetchRefreshToken(supabase: SupabaseClient, accountId: string): Promise<string> {
+  const attempts = 3;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const { data, error } = await supabase.rpc("get_oauth_refresh_token", { p_account_id: accountId });
+    if (!error && data) return data;
+    if (attempt < attempts - 1) await new Promise((resolve) => setTimeout(resolve, 400 * (attempt + 1)));
+  }
+  throw new Error("No refresh token stored for this account");
+}
+
 /** Mints a fresh access token for a connected account from its stored
  * refresh token. Always calls Google (no access-token caching) since this
  * is invoked at most a few times per background job run. */
 export async function getAccessToken(supabase: SupabaseClient, accountId: string): Promise<string> {
-  const { data: refreshToken, error } = await supabase.rpc("get_oauth_refresh_token", {
-    p_account_id: accountId,
-  });
-  if (error || !refreshToken) throw new Error("No refresh token stored for this account");
-
+  const refreshToken = await fetchRefreshToken(supabase, accountId);
   const tokens = await refreshAccessToken(refreshToken);
   return tokens.access_token;
 }

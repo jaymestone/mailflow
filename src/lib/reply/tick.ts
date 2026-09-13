@@ -3,6 +3,7 @@ import { getAccessToken } from "@/lib/gmail/client";
 import { getCurrentHistoryId, listNewMessageIds } from "@/lib/gmail/history";
 import { fetchGmailMessage } from "@/lib/gmail/messages";
 import { applyGmailLabel, CATEGORY_LABEL_NAMES, getOrCreateLabelId } from "@/lib/gmail/labels";
+import { OAuthTokenRevokedError } from "@/lib/oauth/google";
 import { classifyBounce } from "./bounceDetection";
 import { matchInboundMessage } from "./matching";
 import { classifyReply } from "./classify";
@@ -349,10 +350,21 @@ export async function runReplyPollTick(supabase: SupabaseClient): Promise<ReplyT
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error";
       result.errors.push({ account: account.email_address, error: message });
-      await supabase
-        .from("connected_accounts")
-        .update({ status: "error", last_error: message })
-        .eq("id", account.id);
+      // Only a confirmed-revoked/expired token means this account actually
+      // needs a human to reconnect it. Any other failure here (a network
+      // blip, a transient Supabase/Vault read, a Gmail API hiccup) is
+      // logged above but otherwise left alone -- the account stays
+      // 'active' so the next tick, ~15 minutes away, just tries again
+      // instead of permanently benching a healthy account over one bad
+      // moment (confirmed live: this was silently taking every account
+      // down at once on an ordinary transient error, not a real mass
+      // token failure).
+      if (err instanceof OAuthTokenRevokedError) {
+        await supabase
+          .from("connected_accounts")
+          .update({ status: "error", last_error: message })
+          .eq("id", account.id);
+      }
     }
   }
 

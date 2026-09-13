@@ -6,6 +6,7 @@ import { injectClickTracking } from "./clickTracking";
 import { findUnresolvedTokens, resolveTemplate } from "@/lib/templates/resolve";
 import { wrapEmailHtml } from "@/lib/templates/emailHtml";
 import { formatFromAddress, getAccessToken, sendGmailMessage } from "@/lib/gmail/client";
+import { OAuthTokenRevokedError } from "@/lib/oauth/google";
 
 // Per-account daily ramp caps (roundRobin.ts) already bound total volume for
 // the day — this constant's only job is pacing *within* a tick, since
@@ -358,6 +359,17 @@ export async function runSendTick(
         const message = err instanceof Error ? err.message : "Unknown error";
         result.failed++;
         result.details.push({ email: member.email, outcome: `failed: ${message}` });
+
+        // A send is the other place (besides the reply poll) that can
+        // discover a dead token first -- mark the account down here too
+        // so the next tick's account query stops picking it, rather than
+        // waiting on reply-poll-tick to notice separately.
+        if (err instanceof OAuthTokenRevokedError) {
+          await supabase
+            .from("connected_accounts")
+            .update({ status: "error", last_error: message })
+            .eq("id", picked.account.id);
+        }
 
         await supabase.from("outbound_sends").insert({
           campaign_member_id: member.campaign_member_id,

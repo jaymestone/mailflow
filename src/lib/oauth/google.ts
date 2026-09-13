@@ -47,6 +47,18 @@ export async function exchangeCodeForTokens(code: string, origin: string): Promi
   return res.json();
 }
 
+/** Thrown only when Google itself confirms a refresh token is dead
+ * (revoked, expired, or otherwise permanently invalid) — the one failure
+ * mode that actually requires a human to reconnect the account. Every
+ * other failure from this module (a timeout, a 5xx, a rate limit) is a
+ * plain Error, meaning "try again later," not "this account is broken." */
+export class OAuthTokenRevokedError extends Error {
+  constructor(detail: string) {
+    super(`OAuth token revoked: ${detail}`);
+    this.name = "OAuthTokenRevokedError";
+  }
+}
+
 export async function refreshAccessToken(refreshToken: string): Promise<TokenResponse> {
   const res = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",
@@ -58,7 +70,21 @@ export async function refreshAccessToken(refreshToken: string): Promise<TokenRes
       grant_type: "refresh_token",
     }),
   });
-  if (!res.ok) throw new Error(`Token refresh failed: ${res.status} ${await res.text()}`);
+  if (!res.ok) {
+    const body = await res.text();
+    // Google's token endpoint returns 400 + {"error":"invalid_grant"}
+    // specifically when a refresh token has been revoked or expired. Any
+    // other non-OK response (a 5xx, a 429, a transient network error
+    // surfaced as a non-JSON body) is not a confirmed-dead token.
+    let isInvalidGrant = false;
+    try {
+      isInvalidGrant = JSON.parse(body)?.error === "invalid_grant";
+    } catch {
+      // Non-JSON body -- fall through as a generic (retryable) failure.
+    }
+    if (isInvalidGrant) throw new OAuthTokenRevokedError(body);
+    throw new Error(`Token refresh failed: ${res.status} ${body}`);
+  }
   return res.json();
 }
 

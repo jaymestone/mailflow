@@ -9,27 +9,32 @@ import { formatFromAddress, getAccessToken, sendGmailMessage } from "@/lib/gmail
 import { OAuthTokenRevokedError } from "@/lib/oauth/google";
 
 // Per-account daily ramp caps (roundRobin.ts) already bound total volume for
-// the day — this constant's only job is pacing *within* a tick, since
-// nothing else stood between "N contacts became due at once" (e.g. every
-// step-1 send right after enrolling a new campaign) and firing all N sends
-// back-to-back with nothing but network latency between them. That's a real
-// burst-sending pattern, risky from a personal/Workspace Gmail account
-// rather than dedicated ESP infrastructure.
+// the day — this constant's only job is pacing *within* a tick: both
+// avoiding a burst-sending pattern (risky from a personal/Workspace Gmail
+// account) and, just as importantly, staying under cron-job.org's hard
+// 30-second request timeout, which actually kills the in-flight Vercel
+// function rather than just misreporting a slow run.
 //
 // This is a GLOBAL cap per tick, shared across every account and every
-// active campaign combined, not per account — worth remembering next time
-// this number needs revisiting. The real cron cadence is 15 minutes
-// (confirmed directly against cron-job.org's own run history, not assumed —
-// an earlier version of this comment claimed "5-minute cadence, 100+
-// ticks/day," which was simply wrong and had gone unnoticed because 10/tick
-// was comfortably under even the true, lower ceiling). Within the Mon–Fri
-// 7am–4pm Denver send window, 15-minute ticks give ~36 ticks/day, so
-// 50/tick caps total system throughput around 1,800/day — enough headroom
-// once every account is healthy and ramped to reach several hundred/day
-// each without the tick limit becoming the bottleneck (raised from 10 to
-// 50 on 2026-09-09 alongside extending every account's ramp schedule to a
-// 300/day top tier).
-const DEFAULT_BATCH_LIMIT = 50;
+// active campaign combined, not per account. Lowered from 50 to 20 on
+// 2026-09-14 after a real production incident: once send_engine_who_is_due
+// started finding genuinely distinct-domain candidates instead of mostly
+// domain-cap skips (see CANDIDATE_FETCH_LIMIT below), each tick's real work
+// went up -- actual Gmail sends take real time (network + several DB
+// writes each), unlike a same-domain skip which is nearly instant. A
+// same-day attempt at 100/tick confirmed this: ticks started exceeding
+// cron-job.org's 30s kill and dying before ever reporting their result to
+// cron_health. 20/tick was confirmed live to complete comfortably inside
+// that window. Total daily throughput is meant to come from cron cadence
+// (ideally 5 minutes, not 15 -- more, smaller ticks add up to a higher
+// safe daily total than fewer, larger ones ever could without risking this
+// same timeout) rather than from pushing this number back up.
+//
+// app_settings.send_batch_limit_override can temporarily raise this for a
+// single day from the database with no code deploy -- but re-learn from
+// today: raising it back toward 50 risks the exact same timeout once real
+// send volume is high, not just a bigger number for its own sake.
+const DEFAULT_BATCH_LIMIT = 20;
 
 // send_engine_who_is_due returns candidates oldest-enrolled-first, with no
 // domain diversity -- if a single campaign enrolled a cluster of same-domain

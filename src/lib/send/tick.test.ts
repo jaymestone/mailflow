@@ -167,10 +167,10 @@ describe("runSendTick candidate pool vs. per-tick domain cap", () => {
   it("looks past a domain-clustered front of the queue to find a distinct-domain send", async () => {
     // 55 due members all sharing one domain (only the first can send this
     // tick -- the rest hit the domain cap), then one due member on a
-    // different domain. With DEFAULT_BATCH_LIMIT (50) as both the fetch
-    // size and the send cap, that 56th member would never even be
-    // fetched. It should still get a real send once the candidate pool is
-    // large enough to reach it.
+    // different domain. If the fetch size were as small as the real send
+    // cap (well under 55), that 56th member would never even be fetched.
+    // It should still get a real send once the candidate pool is large
+    // enough to reach it.
     const clustered = Array.from({ length: 55 }, (_, i) =>
       dueMember({
         campaign_member_id: `cm-gmail-${i}`,
@@ -231,6 +231,6 @@ describe("runSendTick candidate pool vs. per-tick domain cap", () => {
 
     const result = await runSendTick(supabase, { dryRun: true, ignoreSendWindow: true });
 
-    expect(result.sent).toBe(50);
+    expect(result.sent).toBe(20);
   });
 });

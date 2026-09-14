@@ -160,3 +160,77 @@ describe("runSendTick account selection", () => {
     expect(result.details[0].account).toBe("acc-a@example.com");
   });
 });
+
+const HIGH_RAMP = [{ after_days: 0, cap: 1000 }]; // high enough that account daily caps never gate these tests
+
+describe("runSendTick candidate pool vs. per-tick domain cap", () => {
+  it("looks past a domain-clustered front of the queue to find a distinct-domain send", async () => {
+    // 55 due members all sharing one domain (only the first can send this
+    // tick -- the rest hit the domain cap), then one due member on a
+    // different domain. With DEFAULT_BATCH_LIMIT (50) as both the fetch
+    // size and the send cap, that 56th member would never even be
+    // fetched. It should still get a real send once the candidate pool is
+    // large enough to reach it.
+    const clustered = Array.from({ length: 55 }, (_, i) =>
+      dueMember({
+        campaign_member_id: `cm-gmail-${i}`,
+        contact_id: `contact-gmail-${i}`,
+        current_step: 0,
+        next_step: 1,
+        email: `venue${i}@gmail.com`,
+        recipient_domain: "gmail.com",
+      }),
+    );
+    const distinctDomain = dueMember({
+      campaign_member_id: "cm-other",
+      contact_id: "contact-other",
+      current_step: 0,
+      next_step: 1,
+      email: "venue@a-totally-different-domain.org",
+      recipient_domain: "a-totally-different-domain.org",
+    });
+
+    const supabase = mockSupabase(
+      {
+        app_settings: [{ key: "round_robin_cursor", value: -1 }],
+        connected_accounts: [{ ...account("acc-a"), ramp_schedule: HIGH_RAMP }],
+        send_counters: [],
+        outbound_sends: [],
+      },
+      { send_engine_who_is_due: [...clustered, distinctDomain] },
+    );
+
+    const result = await runSendTick(supabase, { dryRun: true, ignoreSendWindow: true });
+
+    expect(result.sent).toBe(2); // the one gmail.com send + the distinct-domain one
+    expect(result.skippedDomainCap).toBe(54);
+    expect(result.details.some((d) => d.email === "venue@a-totally-different-domain.org" && d.outcome === "would send")).toBe(true);
+  });
+
+  it("still stops at DEFAULT_BATCH_LIMIT real sends even with a much larger candidate pool available", async () => {
+    const manyDistinctDomains = Array.from({ length: 60 }, (_, i) =>
+      dueMember({
+        campaign_member_id: `cm-${i}`,
+        contact_id: `contact-${i}`,
+        current_step: 0,
+        next_step: 1,
+        email: `venue${i}@domain${i}.example`,
+        recipient_domain: `domain${i}.example`,
+      }),
+    );
+
+    const supabase = mockSupabase(
+      {
+        app_settings: [{ key: "round_robin_cursor", value: -1 }],
+        connected_accounts: [{ ...account("acc-a"), ramp_schedule: HIGH_RAMP }],
+        send_counters: [],
+        outbound_sends: [],
+      },
+      { send_engine_who_is_due: manyDistinctDomains },
+    );
+
+    const result = await runSendTick(supabase, { dryRun: true, ignoreSendWindow: true });
+
+    expect(result.sent).toBe(50);
+  });
+});

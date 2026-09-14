@@ -31,6 +31,21 @@ import { OAuthTokenRevokedError } from "@/lib/oauth/google";
 // 300/day top tier).
 const DEFAULT_BATCH_LIMIT = 50;
 
+// send_engine_who_is_due returns candidates oldest-enrolled-first, with no
+// domain diversity -- if a single campaign enrolled a cluster of same-domain
+// contacts together (confirmed live: 147 of 1,000 currently-due contacts
+// share gmail.com, all enrolled in the same campaign), a straight
+// DEFAULT_BATCH_LIMIT-sized slice of the queue can be dominated by
+// duplicates of one domain. Since only one send per domain is allowed per
+// tick (below), a tick like that burns nearly its whole batch on skips and
+// sends almost nothing -- observed directly: 50 attempted, 49 skipped as
+// "domain already sent this tick," 1 actually sent. Fetching a much larger
+// candidate pool than the real per-tick send cap gives the loop enough
+// room to find DEFAULT_BATCH_LIMIT worth of *distinct*-domain candidates
+// even when the front of the queue is domain-clustered, without changing
+// the actual real-send pacing limit itself.
+const CANDIDATE_FETCH_LIMIT = 500;
+
 type DueMember = {
   campaign_member_id: string;
   campaign_id: string;
@@ -167,13 +182,18 @@ export async function runSendTick(
     let cursor = typeof settings.round_robin_cursor === "number" ? settings.round_robin_cursor : -1;
 
     const { data: dueMembers } = await supabase.rpc("send_engine_who_is_due", {
-      batch_limit: DEFAULT_BATCH_LIMIT,
+      batch_limit: CANDIDATE_FETCH_LIMIT,
     });
     const members: DueMember[] = dueMembers ?? [];
 
     const domainsSentThisTick = new Set<string>();
 
     for (const member of members) {
+      // The real per-tick pacing limit -- stop once we've actually sent
+      // this many, regardless of how many more candidates remain in the
+      // (deliberately oversized) pool fetched above.
+      if (result.sent >= DEFAULT_BATCH_LIMIT) break;
+
       result.attempted++;
 
       if (domainsSentThisTick.has(member.recipient_domain)) {

@@ -135,8 +135,15 @@ export async function runSendTick(
     const { data: settingsRows } = await supabase
       .from("app_settings")
       .select("key, value")
-      .in("key", ["round_robin_cursor", "reply_to_account_id", "send_window"]);
+      .in("key", ["round_robin_cursor", "reply_to_account_id", "send_window", "send_batch_limit_override"]);
     const settings = Object.fromEntries((settingsRows ?? []).map((r) => [r.key, r.value]));
+
+    // A temporary, DB-set override of the per-tick pacing cap (see
+    // DEFAULT_BATCH_LIMIT above) -- for deliberately catching up lost
+    // volume on a specific day, without a code deploy. Expected to be
+    // cleared back to unset shortly after, not left in place indefinitely.
+    const batchLimit =
+      typeof settings.send_batch_limit_override === "number" ? settings.send_batch_limit_override : DEFAULT_BATCH_LIMIT;
 
     if (!opts.ignoreSendWindow && settings.send_window && !isWithinSendWindow(settings.send_window)) {
       result.details.push({ email: "", outcome: "skipped: outside configured send window" });
@@ -192,7 +199,7 @@ export async function runSendTick(
       // The real per-tick pacing limit -- stop once we've actually sent
       // this many, regardless of how many more candidates remain in the
       // (deliberately oversized) pool fetched above.
-      if (result.sent >= DEFAULT_BATCH_LIMIT) break;
+      if (result.sent >= batchLimit) break;
 
       result.attempted++;
 

@@ -147,6 +147,12 @@ export async function runReplyPollTick(supabase: SupabaseClient): Promise<ReplyT
             matched_contact_id: match.contactId,
             matched_outbound_send_id: match.outboundSendId,
             match_method: match.matchMethod,
+            // Raw threading headers, kept regardless of whether they led to
+            // a match -- the only way to diagnose an unmatched message
+            // after the fact (was In-Reply-To missing entirely, or present
+            // but pointing at something we don't recognize?).
+            in_reply_to: email.inReplyTo,
+            references_header: email.references.join(" ") || null,
             message_type: bounceInfo.isBounce ? "bounce" : "reply",
             classification_category: category,
             ooo_return_date: category === "ooo_temporary" ? oooReturnDate : null,

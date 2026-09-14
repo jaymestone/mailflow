@@ -14,17 +14,33 @@ function minutesSince(dateStr: string): number {
 export default async function HealthPage() {
   const supabase = await createClient();
 
-  const [{ data: cronHealth }, { data: accounts }, { data: recentFailures }, { data: sendLock }] = await Promise.all([
-    supabase.from("cron_health").select("job_name, last_run_at, last_result"),
-    supabase.from("connected_accounts").select("id, email_address, status, last_error"),
-    supabase
-      .from("outbound_sends")
-      .select("id, contact_id, error_message, created_at")
-      .eq("status", "failed")
-      .order("created_at", { ascending: false })
-      .limit(20),
-    supabase.from("send_lock").select("locked_at").eq("id", true).maybeSingle(),
-  ]);
+  const [{ data: cronHealth }, { data: accounts }, { data: recentFailures }, { data: sendLock }, { data: unmatched }] =
+    await Promise.all([
+      supabase.from("cron_health").select("job_name, last_run_at, last_result"),
+      supabase.from("connected_accounts").select("id, email_address, status, last_error"),
+      supabase
+        .from("outbound_sends")
+        .select("id, contact_id, error_message, created_at")
+        .eq("status", "failed")
+        .order("created_at", { ascending: false })
+        .limit(20),
+      supabase.from("send_lock").select("locked_at").eq("id", true).maybeSingle(),
+      // A reply/bounce that never linked back to a campaign send is
+      // invisible everywhere else -- no campaign's Replies tab shows it
+      // (that's scoped to matched_campaign_id), so the send engine has no
+      // idea the contact ever responded and just keeps going. Surfacing
+      // these here is the only way anyone finds out before the next
+      // scheduled step fires. See migration 00000000000027 for why
+      // in_reply_to/references_header exist -- they're the actual
+      // evidence for *why* a given message didn't match.
+      supabase
+        .from("inbound_messages")
+        .select("id, from_email, from_name, subject, message_type, received_at, in_reply_to, references_header")
+        .eq("match_method", "unmatched")
+        .in("message_type", ["reply", "bounce"])
+        .order("received_at", { ascending: false })
+        .limit(20),
+    ]);
 
   // Mirrors the 5-minute self-expiry try_acquire_send_lock() itself applies
   // (see the send_lock migration) -- a lock older than that isn't really
@@ -154,6 +170,56 @@ export default async function HealthPage() {
                 <tr>
                   <td colSpan={2} className="py-6 text-center text-muted-3">
                     No failed sends.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="mt-9">
+        <h2 className="font-display text-[21px] font-medium text-ink">Unmatched inbound messages</h2>
+        <p className="mt-1.5 text-pretty text-sm text-muted">
+          A reply or bounce Mailflow couldn&apos;t link back to a campaign send — the send engine has no record this
+          contact responded, so a scheduled follow-up step won&apos;t be held back automatically. Worth a manual
+          check on whether that contact should be paused. The headers below are what the match was attempted
+          against, for diagnosing why it missed.
+        </p>
+        <div className="mt-3 overflow-x-auto">
+          <table className="w-full text-left text-sm">
+            <thead className="border-b border-hairline-strong text-[10px] tracking-wide text-faint uppercase">
+              <tr>
+                <th className="py-2 pr-3">When</th>
+                <th className="py-2 pr-3">From</th>
+                <th className="py-2 pr-3">Type</th>
+                <th className="py-2 pr-3">Subject</th>
+                <th className="py-2 pr-3">In-Reply-To</th>
+                <th className="py-2 pr-3">References</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(unmatched ?? []).map((m) => (
+                <tr key={m.id} className="border-b border-hairline-soft align-top">
+                  <td className="py-2.5 pr-3 whitespace-nowrap text-faint-2">
+                    {new Date(m.received_at).toLocaleString()}
+                  </td>
+                  <td className="py-2.5 pr-3 text-ink">
+                    {m.from_name ? `${m.from_name} ` : ""}
+                    <span className="text-muted-3">{m.from_email}</span>
+                  </td>
+                  <td className="py-2.5 pr-3 text-muted-2">{m.message_type}</td>
+                  <td className="py-2.5 pr-3 text-ink-soft">{m.subject ?? "—"}</td>
+                  <td className="py-2.5 pr-3 font-mono text-[11px] text-faint-2">{m.in_reply_to ?? "(missing)"}</td>
+                  <td className="py-2.5 pr-3 font-mono text-[11px] text-faint-2">
+                    {m.references_header ?? "(missing)"}
+                  </td>
+                </tr>
+              ))}
+              {(unmatched ?? []).length === 0 && (
+                <tr>
+                  <td colSpan={6} className="py-6 text-center text-muted-3">
+                    Nothing unmatched — every reply and bounce so far has linked back to a real send.
                   </td>
                 </tr>
               )}

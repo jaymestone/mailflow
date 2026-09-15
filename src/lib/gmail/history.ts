@@ -8,18 +8,15 @@ export async function getCurrentHistoryId(accessToken: string): Promise<string> 
 }
 
 // Hard cap on how many history.list pages a single call will page through.
-// This was unbounded until 2026-09-15 -- confirmed live as the actual cause
-// of reply-poll-tick timing out repeatedly in production: today's much
-// higher send volume (itself from this week's throughput fixes) means far
-// more Gmail history accumulates between polls than before, and this
-// function was paginating through all of it before ever returning, which
-// alone could exceed cron-job.org's 30s / Vercel's 60s ceiling regardless
-// of any per-message processing cap downstream. Several other, unrelated
-// hypotheses (a new recovery feature, per-account vs. tick-wide message
-// caps) were tried and reverted chasing this same symptom before this was
-// found -- worth remembering next time something in this tick times out
-// that this unbounded page loop is the first thing to suspect.
-const MAX_HISTORY_PAGES = 1;
+// This was unbounded until 2026-09-15. It turned out NOT to be the actual
+// cause of that day's string of reply-poll-tick timeouts (that was a
+// self-inflicted Gmail API per-minute rate limit from repeated manual
+// testing while debugging -- see git history for the full chase, several
+// other hypotheses were tried and reverted first). Kept anyway as real
+// defense-in-depth: today's much higher send volume means more history
+// accumulates between polls than before, and nothing should ever page
+// through it unboundedly regardless of what triggers a large gap.
+const MAX_HISTORY_PAGES = 3;
 
 export async function listNewMessageIds(
   accessToken: string,

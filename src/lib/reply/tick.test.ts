@@ -8,7 +8,8 @@ import { runReplyPollTick } from "./tick";
 // Gmail API or the classifier.
 vi.mock("@/lib/gmail/client", () => ({ getAccessToken: vi.fn(async () => "fake-token") }));
 vi.mock("@/lib/oauth/google", () => ({ OAuthTokenRevokedError: class OAuthTokenRevokedError extends Error {} }));
-vi.mock("./bounceDetection", () => ({ classifyBounce: vi.fn(() => ({ isBounce: false, isHard: false })) }));
+const classifyBounce = vi.fn((_email: unknown) => ({ isBounce: false, isHard: false }));
+vi.mock("./bounceDetection", () => ({ classifyBounce: (email: unknown) => classifyBounce(email) }));
 vi.mock("./classify", () => ({
   classifyReply: vi.fn(async () => ({ category: "interested", oooReturnDate: null })),
 }));
@@ -215,5 +216,43 @@ describe("runReplyPollTick", () => {
     expect(listNewMessageIds).toHaveBeenCalledWith("fake-token", "50", null);
     expect(capturedUpdate).toEqual({ history_page_token: "page-2-token" });
     expect(updateEq).toHaveBeenCalledWith("id", "acc-1");
+  });
+
+  // The actual fix for what Jayme reported live on 2026-09-15: a bounce-
+  // heavy backlog held steady for 3+ hours because bounces and genuine
+  // replies shared one small tick-wide cap, even though bounces need no
+  // AI call and cost almost nothing. This proves cheap and expensive now
+  // draw from separate budgets sized very differently.
+  it("gives bounces a much larger tick-wide budget than genuine replies, which stay conservatively capped", async () => {
+    const messageIds = ["b1", "b2", "b3", "b4", "b5", "r1", "r2", "r3"];
+    listNewMessageIds.mockResolvedValueOnce({ messageIds, newHistoryId: "100", wasReset: false, truncated: false, nextPageToken: null });
+
+    // First 5 calls (b1-b5) are bounces, last 3 (r1-r3) are genuine replies.
+    classifyBounce.mockReset();
+    for (let i = 0; i < 5; i++) classifyBounce.mockReturnValueOnce({ isBounce: true, isHard: true });
+    for (let i = 0; i < 3; i++) classifyBounce.mockReturnValueOnce({ isBounce: false, isHard: false });
+
+    for (const id of messageIds) {
+      fetchGmailMessage.mockResolvedValueOnce(fakeEmail({ gmailMessageId: id, labelIds: ["INBOX"] }));
+    }
+
+    const { classifyReply } = await import("./classify");
+    vi.mocked(classifyReply).mockClear();
+
+    const supabaseAccounts = {
+      from: (table: string) => {
+        if (table === "connected_accounts") {
+          return { select: () => ({ eq: () => ({ data: [{ id: "acc-1", email_address: "stone@jaymestone.com", last_history_id: "50", history_page_token: null }], error: null }) }) };
+        }
+        return fakeSupabase().from(table);
+      },
+    } as unknown as SupabaseClient;
+
+    const result = await runReplyPollTick(supabaseAccounts);
+
+    // All 5 bounces fit inside the cheap budget (8) -- none throttled.
+    expect(result.bounces).toBe(5);
+    // Only 2 of the 3 replies fit inside the conservative expensive budget.
+    expect(classifyReply).toHaveBeenCalledTimes(2);
   });
 });

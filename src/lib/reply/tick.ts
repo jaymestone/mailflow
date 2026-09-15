@@ -30,9 +30,26 @@ const DEFAULT_OOO_SNOOZE_DAYS = 7;
 // consecutive real automated ticks timed out at the full 60s with nothing
 // reported to cron_health, even after unrelated changes elsewhere in this
 // file were fully reverted, proving this was the actual bottleneck all
-// along and not those other changes. Sized conservatively (2) given the
-// worst case of an all-real-replies batch at up to 12s each.
-const MAX_NEW_MESSAGES_PER_TICK = 2;
+// along and not those other changes.
+//
+// Split into two separate tick-wide budgets, not one shared number --
+// classifyBounce is an instant, local, rule-based check (no network call),
+// so a bounce/DSN costs almost nothing beyond the Gmail fetch and a couple
+// of DB writes; only a genuine reply needs the slow classifyReply call.
+// Lumping both into one small shared cap (the original fix) meant a
+// backlog dominated by cheap bounces drained at the same throttled pace as
+// the expensive path required, even though almost none of it was actually
+// at risk -- confirmed live, 2026-09-15: a real backlog held steady around
+// 20-25 messages for 3+ hours because new mail arrived about as fast as
+// the shared cap of 2/tick could clear it, regardless of type. Cheap gets
+// real headroom; expensive stays exactly as conservative as before.
+const MAX_CHEAP_MESSAGES_PER_TICK = 8;
+const MAX_EXPENSIVE_MESSAGES_PER_TICK = 2;
+
+/** Tick-wide (shared across every account) budget tracker, mutated in
+ * place as processOneMessage consumes from whichever bucket a given
+ * message turns out to need. */
+type MessageBudget = { cheap: number; expensive: number };
 
 export type ReplyTickResult = {
   accountsPolled: number;
@@ -111,8 +128,13 @@ async function retryLabelOnly(
   accessToken: string,
   labelCache: Map<string, string>,
   existing: { id: string; classification_category: ReplyCategory | null },
+  budget: MessageBudget,
 ): Promise<"processed" | "skipped"> {
   if (!existing.classification_category) return "skipped"; // shouldn't happen, but nothing sane to label with
+  // No LLM call here (reusing the already-stored category) -- counts
+  // against the cheap budget, same as a bounce.
+  if (budget.cheap <= 0) return "skipped"; // retried again next tick
+  budget.cheap--;
   const email = await fetchGmailMessage(accessToken, messageId);
   await applyCategoryLabel(accessToken, account.id, email.gmailMessageId, existing.classification_category, email.labelIds, labelCache);
   await supabase.from("inbound_messages").update({ label_applied_at: new Date().toISOString() }).eq("id", existing.id);
@@ -136,6 +158,7 @@ async function processOneMessage(
   accessToken: string,
   labelCache: Map<string, string>,
   result: ReplyTickResult,
+  budget: MessageBudget,
 ): Promise<"processed" | "skipped"> {
   try {
     const { data: existing } = await supabase
@@ -156,14 +179,32 @@ async function processOneMessage(
     // aren't safe to repeat (e.g. re-queuing the same venue for
     // replacement research, or re-deleting an already-deleted contact).
     if (existing) {
-      return await retryLabelOnly(supabase, account, messageId, accessToken, labelCache, existing);
+      return await retryLabelOnly(supabase, account, messageId, accessToken, labelCache, existing, budget);
     }
 
     const email = await fetchGmailMessage(accessToken, messageId);
     if (email.labelIds.includes("SENT")) return "skipped"; // our own outbound copy
 
-    result.messagesFetched++;
+    // classifyBounce is instant and local (no network call) -- safe to run
+    // before either budget check below, since it's what decides which
+    // budget actually applies.
     const bounceInfo = classifyBounce(email);
+
+    // Cheap path (no LLM call) vs. expensive path (a real classifyReply
+    // call, up to 12s) draw from separate tick-wide budgets -- see
+    // MAX_CHEAP_MESSAGES_PER_TICK / MAX_EXPENSIVE_MESSAGES_PER_TICK above.
+    // Bailing out here (before matching/insert/anything else) leaves
+    // nothing behind, so this message is cleanly retried on a later tick,
+    // same as hitting the old single shared cap used to behave.
+    if (bounceInfo.isBounce) {
+      if (budget.cheap <= 0) return "skipped";
+      budget.cheap--;
+    } else {
+      if (budget.expensive <= 0) return "skipped";
+      budget.expensive--;
+    }
+
+    result.messagesFetched++;
     const match = await matchInboundMessage(supabase, email);
 
     let category: ReplyCategory;
@@ -361,8 +402,7 @@ async function processOneMessage(
     // succeed. Left alone, that's worse than the general case above:
     // since nothing ever gets inserted into inbound_messages for it,
     // the `existing` check never learns to skip it, so it keeps
-    // re-occupying one of this tick's MAX_NEW_MESSAGES_PER_TICK slots
-    // forever. If several such messages cluster together (confirmed
+    // re-occupying one of this tick's message-budget slots forever. If several such messages cluster together (confirmed
     // live: an account reconnected after a multi-week gap had a
     // backlog where the first 5 history entries were all permanently-
     // deleted messages), hitBatchCap never clears and the checkpoint
@@ -415,8 +455,8 @@ export async function runReplyPollTick(supabase: SupabaseClient): Promise<ReplyT
     .eq("status", "active");
 
   // Rotate which account goes first each tick, same idea as send/tick.ts's
-  // round-robin cursor. Without this, the shared MAX_NEW_MESSAGES_PER_TICK
-  // budget below always goes to whichever accounts happen to come first in
+  // round-robin cursor. Without this, the shared message budget below
+  // always goes to whichever accounts happen to come first in
   // this query's (unordered) result -- confirmed live, 2026-09-15:
   // stone@jaymestone.com, our highest-volume account with the largest real
   // backlog, made zero progress across many ticks because busier accounts
@@ -439,10 +479,10 @@ export async function runReplyPollTick(supabase: SupabaseClient): Promise<ReplyT
   // at most once, not once per message — see getOrCreateLabelId.
   const labelCache = new Map<string, string>();
 
-  // Tick-wide (not per-account) -- see MAX_NEW_MESSAGES_PER_TICK above for
-  // why this must be shared across every account in the loop, not reset
-  // per account.
-  let newlyProcessedThisTick = 0;
+  // Tick-wide (not per-account) -- see MAX_CHEAP_MESSAGES_PER_TICK /
+  // MAX_EXPENSIVE_MESSAGES_PER_TICK above for why this must be shared
+  // across every account in the loop, not reset per account.
+  const budget: MessageBudget = { cheap: MAX_CHEAP_MESSAGES_PER_TICK, expensive: MAX_EXPENSIVE_MESSAGES_PER_TICK };
 
   for (const account of accounts ?? []) {
     result.accountsPolled++;
@@ -467,12 +507,11 @@ export async function runReplyPollTick(supabase: SupabaseClient): Promise<ReplyT
       let hitBatchCap = false;
 
       for (const messageId of messageIds) {
-        if (newlyProcessedThisTick >= MAX_NEW_MESSAGES_PER_TICK) {
+        if (budget.cheap <= 0 && budget.expensive <= 0) {
           hitBatchCap = true;
           break;
         }
-        const outcome = await processOneMessage(supabase, account, messageId, accessToken, labelCache, result);
-        if (outcome === "processed") newlyProcessedThisTick++;
+        await processOneMessage(supabase, account, messageId, accessToken, labelCache, result, budget);
       }
 
       // Search-based recovery on a reset checkpoint is still disabled (see

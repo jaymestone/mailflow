@@ -376,7 +376,7 @@ export async function runReplyPollTick(supabase: SupabaseClient): Promise<ReplyT
         continue;
       }
 
-      const { messageIds, newHistoryId, wasReset } = await listNewMessageIds(
+      const { messageIds, newHistoryId, wasReset, truncated } = await listNewMessageIds(
         accessToken,
         account.last_history_id,
       );
@@ -392,33 +392,26 @@ export async function runReplyPollTick(supabase: SupabaseClient): Promise<ReplyT
         if (outcome === "processed") newlyProcessedThisTick++;
       }
 
-      // TEMPORARILY DISABLED (2026-09-15) -- the search-based recovery that
-      // used to run here on a reset checkpoint caused two rounds of live
-      // production timeouts today even after tightening its budget down to
-      // a single message per tick, and a third attempt at the tightened
-      // version *still* timed out at the full 60s -- meaning the real cause
-      // isn't fully understood yet (not just "recovery does too much work"
-      // as first assumed). Leaving reply processing itself completely stuck
-      // (every invocation timing out, nothing getting classified at all) is
-      // a worse failure than the original silent-reset gap it was meant to
-      // fix, so this reverts to that original, known-safe behavior: on a
-      // reset, just re-baseline the checkpoint and move on, same as before
-      // recovery existed. historyResets stays in the result shape (always
-      // empty for now) so the Health page code doesn't need to change again
-      // once this is re-enabled. Needs investigation with better visibility
-      // into where the time is actually going before trying again.
+      // Search-based recovery on a reset checkpoint is still disabled (see
+      // MAX_HISTORY_PAGES in gmail/history.ts for how the actual timeout
+      // root cause -- unbounded pagination through Gmail's history stream,
+      // unrelated to recovery -- was eventually found and fixed). Recovery
+      // itself could reasonably be re-enabled now that the real bottleneck
+      // is understood, but hasn't been re-verified live yet -- leaving it
+      // off is the more conservative choice until it is.
       if (wasReset) {
         result.historyResets.push({ account: account.email_address, recovered: 0 });
       }
 
-      // Only advance the checkpoint after getting through every message in
-      // this batch — if a cap cut it short, leaving last_history_id where it
-      // was means the next tick retries the same range. Anything already
-      // processed this round is a cheap existing-row lookup and gets
-      // skipped instantly; only the still-unprocessed remainder actually
-      // costs time, so the batch naturally drains over successive ticks
-      // instead of the excess being silently skipped forever.
-      if (!hitBatchCap) {
+      // Only advance the checkpoint once history.list actually got all the
+      // way through (not truncated -- see MAX_HISTORY_PAGES) AND the
+      // per-tick message-processing budget didn't cut the batch short.
+      // Either case left as-is means the next tick retries the same range;
+      // anything already processed this round is a cheap existing-row
+      // lookup, so only the still-unprocessed remainder costs real time,
+      // letting a large backlog drain gradually over successive ticks
+      // instead of ever needing to finish in one shot.
+      if (!hitBatchCap && !truncated) {
         await supabase
           .from("connected_accounts")
           .update({ last_history_id: newHistoryId })

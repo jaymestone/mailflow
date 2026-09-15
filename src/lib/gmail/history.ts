@@ -7,18 +7,34 @@ export async function getCurrentHistoryId(accessToken: string): Promise<string> 
   return data.historyId;
 }
 
+// Hard cap on how many history.list pages a single call will page through.
+// This was unbounded until 2026-09-15 -- confirmed live as the actual cause
+// of reply-poll-tick timing out repeatedly in production: today's much
+// higher send volume (itself from this week's throughput fixes) means far
+// more Gmail history accumulates between polls than before, and this
+// function was paginating through all of it before ever returning, which
+// alone could exceed cron-job.org's 30s / Vercel's 60s ceiling regardless
+// of any per-message processing cap downstream. Several other, unrelated
+// hypotheses (a new recovery feature, per-account vs. tick-wide message
+// caps) were tried and reverted chasing this same symptom before this was
+// found -- worth remembering next time something in this tick times out
+// that this unbounded page loop is the first thing to suspect.
+const MAX_HISTORY_PAGES = 5;
+
 export async function listNewMessageIds(
   accessToken: string,
   startHistoryId: string,
-): Promise<{ messageIds: string[]; newHistoryId: string; wasReset: boolean }> {
+): Promise<{ messageIds: string[]; newHistoryId: string; wasReset: boolean; truncated: boolean }> {
   const messageIds = new Set<string>();
   let pageToken: string | undefined;
   let newHistoryId = startHistoryId;
+  let pagesFetched = 0;
 
   do {
     const params = new URLSearchParams({
       startHistoryId,
       historyTypes: "messageAdded",
+      maxResults: "100",
     });
     if (pageToken) params.set("pageToken", pageToken);
 
@@ -33,11 +49,12 @@ export async function listNewMessageIds(
       // exist between the old checkpoint and now, so it can fall back to a direct
       // search instead of silently treating this the same as "nothing new."
       if (res.status === 404) {
-        return { messageIds: [], newHistoryId: await getCurrentHistoryId(accessToken), wasReset: true };
+        return { messageIds: [], newHistoryId: await getCurrentHistoryId(accessToken), wasReset: true, truncated: false };
       }
       throw new Error(`Gmail history.list failed: ${res.status} ${await res.text()}`);
     }
     const data = await res.json();
+    pagesFetched++;
 
     for (const record of data.history ?? []) {
       for (const added of record.messagesAdded ?? []) {
@@ -46,9 +63,24 @@ export async function listNewMessageIds(
     }
     if (data.historyId) newHistoryId = data.historyId;
     pageToken = data.nextPageToken;
+
+    if (pageToken && pagesFetched >= MAX_HISTORY_PAGES) {
+      // More pages exist but stopping here to stay inside the time budget.
+      // truncated:true tells the caller NOT to advance the stored checkpoint
+      // to newHistoryId -- Gmail's per-page historyId reflects the mailbox's
+      // current state, not "as of this page," so trusting it here would
+      // silently skip whatever was on the unfetched remaining pages (the
+      // same class of bug the 404/reset handling above exists to avoid).
+      // Leaving the checkpoint where it was means the next tick re-fetches
+      // these same first MAX_HISTORY_PAGES pages -- cheap (existing-row
+      // skips) except for the couple of genuinely new messages each tick's
+      // own processing cap allows through, so this account drains
+      // gradually over successive ticks instead of ever timing out.
+      return { messageIds: [...messageIds], newHistoryId: startHistoryId, wasReset: false, truncated: true };
+    }
   } while (pageToken);
 
-  return { messageIds: [...messageIds], newHistoryId, wasReset: false };
+  return { messageIds: [...messageIds], newHistoryId, wasReset: false, truncated: false };
 }
 
 /** Direct message search, independent of the history-based incremental sync

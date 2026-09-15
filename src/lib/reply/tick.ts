@@ -17,6 +17,17 @@ const DEFAULT_OOO_SNOOZE_DAYS = 7;
 // polled account doesn't try to pull an unbounded amount of mail.
 const RESET_RECOVERY_SEARCH_QUERY = "newer_than:2d";
 
+// Separate from, and much smaller than, MAX_NEW_MESSAGES_PER_TICK below --
+// this one is shared across every account in the tick combined, not
+// per-account. If several accounts reset in the same tick (a real
+// possibility: whatever invalidates one checkpoint can plausibly affect
+// several at once), each doing its own full MAX_NEW_MESSAGES_PER_TICK of
+// recovery work would multiply straight past the 30s cron-job.org ceiling
+// (see DEFAULT_BATCH_LIMIT's comment in send/tick.ts for the same
+// constraint). Recovery drains over however many ticks it takes; nothing
+// about it needs to finish in one shot the way it might feel like it should.
+const MAX_RECOVERY_MESSAGES_PER_TICK = 3;
+
 // cron-job.org's own client-side request timeout is a confirmed hard 30s
 // ceiling (checked directly — not configurable even on request), shorter
 // than this route's Vercel maxDuration (60s). A burst of new messages
@@ -353,6 +364,10 @@ export async function runReplyPollTick(supabase: SupabaseClient): Promise<ReplyT
   // at most once, not once per message — see getOrCreateLabelId.
   const labelCache = new Map<string, string>();
 
+  // Tick-wide (not per-account) budget for reset-recovery work -- see
+  // MAX_RECOVERY_MESSAGES_PER_TICK above.
+  let recoveryProcessedThisTick = 0;
+
   for (const account of accounts ?? []) {
     result.accountsPolled++;
     try {
@@ -391,11 +406,26 @@ export async function runReplyPollTick(supabase: SupabaseClient): Promise<ReplyT
       // message search covers it: anything already processed is a cheap
       // existing-row skip inside processOneMessage, so this is safe to run
       // even when the "gap" turns out to be empty or already handled.
+      // Set when the *shared, tick-wide* recovery budget (not this
+      // account's own cap) is what cut recovery short -- distinct from
+      // hitBatchCap below, which only reflects this one account's own
+      // MAX_NEW_MESSAGES_PER_TICK. Matters for the checkpoint-advance
+      // decision just below: if the shared budget ran out, this account's
+      // gap isn't actually fully covered yet, so the checkpoint must stay
+      // put and retry (searchMessageIds is idempotent via the existing-row
+      // check, so retrying is cheap) rather than advancing past
+      // still-unrecovered messages.
+      let recoveryIncomplete = false;
+
       if (wasReset) {
         let recovered = 0;
         try {
           const candidateIds = await searchMessageIds(accessToken, RESET_RECOVERY_SEARCH_QUERY);
           for (const messageId of candidateIds) {
+            if (recoveryProcessedThisTick >= MAX_RECOVERY_MESSAGES_PER_TICK) {
+              recoveryIncomplete = true;
+              break;
+            }
             if (newlyProcessed >= MAX_NEW_MESSAGES_PER_TICK) {
               hitBatchCap = true;
               break;
@@ -404,6 +434,7 @@ export async function runReplyPollTick(supabase: SupabaseClient): Promise<ReplyT
             if (outcome === "processed") {
               newlyProcessed++;
               recovered++;
+              recoveryProcessedThisTick++;
             }
           }
         } catch (err) {
@@ -414,19 +445,21 @@ export async function runReplyPollTick(supabase: SupabaseClient): Promise<ReplyT
       }
 
       // Only advance the checkpoint after getting through every message in
-      // this batch — if the cap cut it short, leaving last_history_id where
-      // it was means the next tick re-fetches the same full range. Anything
-      // already processed this round is a cheap existing-row lookup and
-      // gets skipped instantly; only the still-unprocessed remainder
-      // actually costs time, so the batch naturally drains over successive
-      // ticks instead of the excess being silently skipped forever.
+      // this batch — if a cap cut it short, leaving last_history_id where it
+      // was means the next tick retries the same range. Anything already
+      // processed this round is a cheap existing-row lookup and gets
+      // skipped instantly; only the still-unprocessed remainder actually
+      // costs time, so the batch naturally drains over successive ticks
+      // instead of the excess being silently skipped forever.
       //
-      // On a reset specifically, newHistoryId is already the fresh baseline
-      // (there's no valid older checkpoint left to preserve), so it always
-      // advances even if the recovery search above hit the batch cap --
-      // recovery search is idempotent (existing-row check) and simply
-      // re-runs next tick for whatever it didn't get to.
-      if (!hitBatchCap || wasReset) {
+      // On a reset, that means: only advance once recovery actually
+      // exhausted its candidate list without hitting *either* cap (its own
+      // account cap, or the tick-wide recovery budget) -- advancing early
+      // would mean the next tick no longer has wasReset:true to re-trigger
+      // recovery with (the checkpoint would look valid again), so whatever
+      // recovery hadn't gotten to yet would never get a second chance.
+      const shouldAdvance = wasReset ? !hitBatchCap && !recoveryIncomplete : !hitBatchCap;
+      if (shouldAdvance) {
         await supabase
           .from("connected_accounts")
           .update({ last_history_id: newHistoryId })

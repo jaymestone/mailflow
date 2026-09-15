@@ -54,24 +54,21 @@ export async function listNewMessageIds(
 /** Direct message search, independent of the history-based incremental sync
  * above -- used as a recovery path when a history reset (see wasReset above)
  * may have created a gap the incremental API can no longer see into. Gmail
- * search query syntax (e.g. "newer_than:2d"), not a historyId. */
+ * search query syntax (e.g. "newer_than:2d"), not a historyId.
+ *
+ * Deliberately a single page (up to 50), not the full paginated result set
+ * -- confirmed live: paginating through every match before returning
+ * anything (a busy account's 2-day window can span hundreds of messages)
+ * made the calling cron request exceed cron-job.org's 30s hard timeout
+ * before a single message had even started processing. The caller only
+ * ever fully processes a handful anyway (MAX_NEW_MESSAGES_PER_TICK), so one
+ * page is already generous headroom, not a meaningful limitation. */
 export async function searchMessageIds(accessToken: string, query: string): Promise<string[]> {
-  const messageIds: string[] = [];
-  let pageToken: string | undefined;
-
-  do {
-    const params = new URLSearchParams({ q: query, maxResults: "50" });
-    if (pageToken) params.set("pageToken", pageToken);
-
-    const res = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages?${params.toString()}`, {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-    if (!res.ok) throw new Error(`Gmail messages.list failed: ${res.status} ${await res.text()}`);
-    const data = await res.json();
-
-    for (const m of data.messages ?? []) messageIds.push(m.id);
-    pageToken = data.nextPageToken;
-  } while (pageToken);
-
-  return messageIds;
+  const res = await fetch(
+    `https://gmail.googleapis.com/gmail/v1/users/me/messages?${new URLSearchParams({ q: query, maxResults: "50" })}`,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+  );
+  if (!res.ok) throw new Error(`Gmail messages.list failed: ${res.status} ${await res.text()}`);
+  const data = await res.json();
+  return (data.messages ?? []).map((m: { id: string }) => m.id);
 }

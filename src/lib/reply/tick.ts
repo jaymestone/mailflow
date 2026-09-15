@@ -409,10 +409,31 @@ export async function runReplyPollTick(supabase: SupabaseClient): Promise<ReplyT
   // Every connected account is polled, not just the Reply-To inbox: bounce
   // notifications land in each sending address's own mailbox (SMTP behavior),
   // while human replies land in whichever address is set as Reply-To.
-  const { data: accounts } = await supabase
+  const { data: rawAccounts } = await supabase
     .from("connected_accounts")
     .select("id, email_address, last_history_id, history_page_token")
     .eq("status", "active");
+
+  // Rotate which account goes first each tick, same idea as send/tick.ts's
+  // round-robin cursor. Without this, the shared MAX_NEW_MESSAGES_PER_TICK
+  // budget below always goes to whichever accounts happen to come first in
+  // this query's (unordered) result -- confirmed live, 2026-09-15:
+  // stone@jaymestone.com, our highest-volume account with the largest real
+  // backlog, made zero progress across many ticks because busier accounts
+  // ahead of it in a consistent order used up the whole budget every time,
+  // even though its own pagination was working fine. Rotating the start
+  // point means every account gets first crack at the budget in turn.
+  // Plain update (not upsert) to match this codebase's existing convention
+  // for app_settings (see round_robin_cursor in send/tick.ts) -- the row is
+  // pre-seeded once rather than auto-created here, so a missing key simply
+  // no-ops (falls back to cursor 0 below) instead of failing.
+  const { data: cursorRow } = await supabase.from("app_settings").select("value").eq("key", "reply_round_robin_cursor").maybeSingle();
+  const cursor = typeof cursorRow?.value === "number" ? cursorRow.value : 0;
+  const accounts = rawAccounts && rawAccounts.length > 0 ? [...rawAccounts.slice(cursor % rawAccounts.length), ...rawAccounts.slice(0, cursor % rawAccounts.length)] : rawAccounts;
+  await supabase
+    .from("app_settings")
+    .update({ value: (cursor + 1) % Math.max(accounts?.length ?? 1, 1) })
+    .eq("key", "reply_round_robin_cursor");
 
   // Shared across the whole tick so each account's Gmail labels are listed
   // at most once, not once per message — see getOrCreateLabelId.

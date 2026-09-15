@@ -13,16 +13,26 @@ const DEFAULT_OOO_SNOOZE_DAYS = 7;
 
 // cron-job.org's own client-side request timeout is a confirmed hard 30s
 // ceiling (checked directly — not configurable even on request), shorter
-// than this route's Vercel maxDuration (60s). A burst of new messages
-// (e.g. a pile of bounces landing at once, or several replies that each
-// need a real classifyReply call) can take long enough to process that
-// cron-job.org disconnects — which actually kills the in-flight function,
-// not just misreports it, so anything still queued behind the disconnect
-// point is lost progress for this run. Capping how many *newly seen*
-// messages get processed per invocation keeps a normal run comfortably
-// under that ceiling; a message already recorded in inbound_messages is a
-// cheap lookup and doesn't count against this cap.
-const MAX_NEW_MESSAGES_PER_TICK = 5;
+// than this route's Vercel maxDuration (60s), and disconnecting past that
+// point actually kills the in-flight function rather than just misreporting
+// it, losing progress on anything still queued behind it. A real (non-
+// bounce) reply needs an actual classifyReply call, which allows up to 12s
+// itself (see classify.ts) -- so a handful of genuine replies is already
+// most of the 30s budget on its own, before any Gmail/DB overhead.
+//
+// This is a GLOBAL, tick-wide cap shared across every account combined, NOT
+// per-account -- it used to be per-account, which meant 5 accounts each
+// hitting their own cap could add up to 25 real classifyReply calls in one
+// invocation, up to 300s of possible work against a 30s wall. That was
+// always a latent risk, not something introduced later; it just took
+// today's much higher reply volume (itself downstream of the send-side
+// throughput fixes) to actually surface it -- confirmed live: three
+// consecutive real automated ticks timed out at the full 60s with nothing
+// reported to cron_health, even after unrelated changes elsewhere in this
+// file were fully reverted, proving this was the actual bottleneck all
+// along and not those other changes. Sized conservatively (2) given the
+// worst case of an all-real-replies batch at up to 12s each.
+const MAX_NEW_MESSAGES_PER_TICK = 2;
 
 export type ReplyTickResult = {
   accountsPolled: number;
@@ -347,6 +357,11 @@ export async function runReplyPollTick(supabase: SupabaseClient): Promise<ReplyT
   // at most once, not once per message — see getOrCreateLabelId.
   const labelCache = new Map<string, string>();
 
+  // Tick-wide (not per-account) -- see MAX_NEW_MESSAGES_PER_TICK above for
+  // why this must be shared across every account in the loop, not reset
+  // per account.
+  let newlyProcessedThisTick = 0;
+
   for (const account of accounts ?? []) {
     result.accountsPolled++;
     try {
@@ -366,16 +381,15 @@ export async function runReplyPollTick(supabase: SupabaseClient): Promise<ReplyT
         account.last_history_id,
       );
 
-      let newlyProcessed = 0;
       let hitBatchCap = false;
 
       for (const messageId of messageIds) {
-        if (newlyProcessed >= MAX_NEW_MESSAGES_PER_TICK) {
+        if (newlyProcessedThisTick >= MAX_NEW_MESSAGES_PER_TICK) {
           hitBatchCap = true;
           break;
         }
         const outcome = await processOneMessage(supabase, account, messageId, accessToken, labelCache, result);
-        if (outcome === "processed") newlyProcessed++;
+        if (outcome === "processed") newlyProcessedThisTick++;
       }
 
       // TEMPORARILY DISABLED (2026-09-15) -- the search-based recovery that

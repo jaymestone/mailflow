@@ -26,7 +26,18 @@ const RESET_RECOVERY_SEARCH_QUERY = "newer_than:2d";
 // (see DEFAULT_BATCH_LIMIT's comment in send/tick.ts for the same
 // constraint). Recovery drains over however many ticks it takes; nothing
 // about it needs to finish in one shot the way it might feel like it should.
-const MAX_RECOVERY_MESSAGES_PER_TICK = 3;
+//
+// Started at 3, confirmed live that was still too high: a real first-time
+// backlog across multiple accounts timed out at the full 60s even after
+// the single-page search fix, meaning the bottleneck is real per-message
+// processing time (a slow classifyReply call, times several accounts each
+// needing recovery simultaneously on this first run), not just the search
+// itself. Dropped to 1 -- slower to fully drain, but each tick is
+// virtually guaranteed to finish regardless of how large the one-time
+// backlog turns out to be, and the normal 5-minute cadence means even a
+// sizeable gap clears within an hour or two without any single invocation
+// being at risk.
+const MAX_RECOVERY_MESSAGES_PER_TICK = 1;
 
 // cron-job.org's own client-side request timeout is a confirmed hard 30s
 // ceiling (checked directly — not configurable even on request), shorter
@@ -417,7 +428,15 @@ export async function runReplyPollTick(supabase: SupabaseClient): Promise<ReplyT
       // still-unrecovered messages.
       let recoveryIncomplete = false;
 
-      if (wasReset) {
+      // If an earlier account in this same tick already used up the shared
+      // budget, skip the search call entirely for this account too --
+      // otherwise every reset account still pays for a real Gmail API call
+      // it can't do anything with, adding up fast when several accounts
+      // reset at once (exactly what caused the 60s timeout this replaced).
+      if (wasReset && recoveryProcessedThisTick >= MAX_RECOVERY_MESSAGES_PER_TICK) {
+        recoveryIncomplete = true;
+        result.historyResets.push({ account: account.email_address, recovered: 0 });
+      } else if (wasReset) {
         let recovered = 0;
         try {
           const candidateIds = await searchMessageIds(accessToken, RESET_RECOVERY_SEARCH_QUERY);

@@ -97,17 +97,22 @@ describe("runReplyPollTick", () => {
     expect(applyGmailLabel).toHaveBeenCalledWith("fake-token", "msg-1", "label-123", expect.arrayContaining(["SPAM"]));
   });
 
-  it("runs a search-based recovery pass when the history checkpoint resets, and reports it in the result", async () => {
-    fetchGmailMessage.mockResolvedValue(fakeEmail({ labelIds: ["INBOX"] }));
+  // The search-based recovery pass that used to run here is temporarily
+  // disabled (2026-09-15) after causing repeated live timeouts -- see the
+  // comment at its old call site in tick.ts. This pins down the current,
+  // deliberately reverted behavior: a reset re-baselines the checkpoint and
+  // is recorded (so it's still visible on the Health page), but no longer
+  // attempts to recover the gap.
+  it("does not attempt recovery on a reset checkpoint (temporarily disabled) -- just re-baselines and reports the reset", async () => {
     listNewMessageIds.mockResolvedValueOnce({ messageIds: [], newHistoryId: "500", wasReset: true });
-    searchMessageIds.mockResolvedValueOnce(["recovered-1"]);
 
+    const updateEq = vi.fn(async () => ({ data: null, error: null }));
     const supabaseAccounts = {
       from: (table: string) => {
         if (table === "connected_accounts") {
           return {
             select: () => ({ eq: () => ({ data: [{ id: "acc-1", email_address: "stone@jaymestone.com", last_history_id: "50" }], error: null }) }),
-            update: () => ({ eq: async () => ({ data: null, error: null }) }),
+            update: () => ({ eq: updateEq }),
           };
         }
         return fakeSupabase().from(table);
@@ -116,7 +121,8 @@ describe("runReplyPollTick", () => {
 
     const result = await runReplyPollTick(supabaseAccounts);
 
-    expect(searchMessageIds).toHaveBeenCalledWith("fake-token", "newer_than:2d");
-    expect(result.historyResets).toEqual([{ account: "stone@jaymestone.com", recovered: 1 }]);
+    expect(searchMessageIds).not.toHaveBeenCalled();
+    expect(result.historyResets).toEqual([{ account: "stone@jaymestone.com", recovered: 0 }]);
+    expect(updateEq).toHaveBeenCalledWith("id", "acc-1"); // checkpoint still re-baselines to newHistoryId
   });
 });

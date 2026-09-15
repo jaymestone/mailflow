@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getAccessToken } from "@/lib/gmail/client";
-import { getCurrentHistoryId, listNewMessageIds, searchMessageIds } from "@/lib/gmail/history";
+import { getCurrentHistoryId, listNewMessageIds } from "@/lib/gmail/history";
 import { fetchGmailMessage } from "@/lib/gmail/messages";
 import { applyGmailLabel, CATEGORY_LABEL_NAMES, getOrCreateLabelId } from "@/lib/gmail/labels";
 import { OAuthTokenRevokedError } from "@/lib/oauth/google";
@@ -10,34 +10,6 @@ import { classifyReply } from "./classify";
 import type { ReplyCategory } from "./types";
 
 const DEFAULT_OOO_SNOOZE_DAYS = 7;
-
-// How far back the direct-search recovery path (see wasReset handling
-// below) looks when a history checkpoint turns out to be unusable. Wide
-// enough to comfortably cover a same-day gap; bounded so a truly old/never-
-// polled account doesn't try to pull an unbounded amount of mail.
-const RESET_RECOVERY_SEARCH_QUERY = "newer_than:2d";
-
-// Separate from, and much smaller than, MAX_NEW_MESSAGES_PER_TICK below --
-// this one is shared across every account in the tick combined, not
-// per-account. If several accounts reset in the same tick (a real
-// possibility: whatever invalidates one checkpoint can plausibly affect
-// several at once), each doing its own full MAX_NEW_MESSAGES_PER_TICK of
-// recovery work would multiply straight past the 30s cron-job.org ceiling
-// (see DEFAULT_BATCH_LIMIT's comment in send/tick.ts for the same
-// constraint). Recovery drains over however many ticks it takes; nothing
-// about it needs to finish in one shot the way it might feel like it should.
-//
-// Started at 3, confirmed live that was still too high: a real first-time
-// backlog across multiple accounts timed out at the full 60s even after
-// the single-page search fix, meaning the bottleneck is real per-message
-// processing time (a slow classifyReply call, times several accounts each
-// needing recovery simultaneously on this first run), not just the search
-// itself. Dropped to 1 -- slower to fully drain, but each tick is
-// virtually guaranteed to finish regardless of how large the one-time
-// backlog turns out to be, and the normal 5-minute cadence means even a
-// sizeable gap clears within an hour or two without any single invocation
-// being at risk.
-const MAX_RECOVERY_MESSAGES_PER_TICK = 1;
 
 // cron-job.org's own client-side request timeout is a confirmed hard 30s
 // ceiling (checked directly — not configurable even on request), shorter
@@ -375,10 +347,6 @@ export async function runReplyPollTick(supabase: SupabaseClient): Promise<ReplyT
   // at most once, not once per message — see getOrCreateLabelId.
   const labelCache = new Map<string, string>();
 
-  // Tick-wide (not per-account) budget for reset-recovery work -- see
-  // MAX_RECOVERY_MESSAGES_PER_TICK above.
-  let recoveryProcessedThisTick = 0;
-
   for (const account of accounts ?? []) {
     result.accountsPolled++;
     try {
@@ -410,57 +378,23 @@ export async function runReplyPollTick(supabase: SupabaseClient): Promise<ReplyT
         if (outcome === "processed") newlyProcessed++;
       }
 
-      // A reset checkpoint means the *incremental* path can no longer see
-      // whatever arrived between the old (now-invalid) checkpoint and this
-      // moment -- that gap used to be silently and permanently lost (see
-      // the direct-search recovery this replaces). Falling back to a plain
-      // message search covers it: anything already processed is a cheap
-      // existing-row skip inside processOneMessage, so this is safe to run
-      // even when the "gap" turns out to be empty or already handled.
-      // Set when the *shared, tick-wide* recovery budget (not this
-      // account's own cap) is what cut recovery short -- distinct from
-      // hitBatchCap below, which only reflects this one account's own
-      // MAX_NEW_MESSAGES_PER_TICK. Matters for the checkpoint-advance
-      // decision just below: if the shared budget ran out, this account's
-      // gap isn't actually fully covered yet, so the checkpoint must stay
-      // put and retry (searchMessageIds is idempotent via the existing-row
-      // check, so retrying is cheap) rather than advancing past
-      // still-unrecovered messages.
-      let recoveryIncomplete = false;
-
-      // If an earlier account in this same tick already used up the shared
-      // budget, skip the search call entirely for this account too --
-      // otherwise every reset account still pays for a real Gmail API call
-      // it can't do anything with, adding up fast when several accounts
-      // reset at once (exactly what caused the 60s timeout this replaced).
-      if (wasReset && recoveryProcessedThisTick >= MAX_RECOVERY_MESSAGES_PER_TICK) {
-        recoveryIncomplete = true;
+      // TEMPORARILY DISABLED (2026-09-15) -- the search-based recovery that
+      // used to run here on a reset checkpoint caused two rounds of live
+      // production timeouts today even after tightening its budget down to
+      // a single message per tick, and a third attempt at the tightened
+      // version *still* timed out at the full 60s -- meaning the real cause
+      // isn't fully understood yet (not just "recovery does too much work"
+      // as first assumed). Leaving reply processing itself completely stuck
+      // (every invocation timing out, nothing getting classified at all) is
+      // a worse failure than the original silent-reset gap it was meant to
+      // fix, so this reverts to that original, known-safe behavior: on a
+      // reset, just re-baseline the checkpoint and move on, same as before
+      // recovery existed. historyResets stays in the result shape (always
+      // empty for now) so the Health page code doesn't need to change again
+      // once this is re-enabled. Needs investigation with better visibility
+      // into where the time is actually going before trying again.
+      if (wasReset) {
         result.historyResets.push({ account: account.email_address, recovered: 0 });
-      } else if (wasReset) {
-        let recovered = 0;
-        try {
-          const candidateIds = await searchMessageIds(accessToken, RESET_RECOVERY_SEARCH_QUERY);
-          for (const messageId of candidateIds) {
-            if (recoveryProcessedThisTick >= MAX_RECOVERY_MESSAGES_PER_TICK) {
-              recoveryIncomplete = true;
-              break;
-            }
-            if (newlyProcessed >= MAX_NEW_MESSAGES_PER_TICK) {
-              hitBatchCap = true;
-              break;
-            }
-            const outcome = await processOneMessage(supabase, account, messageId, accessToken, labelCache, result);
-            if (outcome === "processed") {
-              newlyProcessed++;
-              recovered++;
-              recoveryProcessedThisTick++;
-            }
-          }
-        } catch (err) {
-          const message = err instanceof Error ? err.message : "Unknown error";
-          result.errors.push({ account: `${account.email_address} (reset recovery search)`, error: message });
-        }
-        result.historyResets.push({ account: account.email_address, recovered });
       }
 
       // Only advance the checkpoint after getting through every message in
@@ -470,15 +404,7 @@ export async function runReplyPollTick(supabase: SupabaseClient): Promise<ReplyT
       // skipped instantly; only the still-unprocessed remainder actually
       // costs time, so the batch naturally drains over successive ticks
       // instead of the excess being silently skipped forever.
-      //
-      // On a reset, that means: only advance once recovery actually
-      // exhausted its candidate list without hitting *either* cap (its own
-      // account cap, or the tick-wide recovery budget) -- advancing early
-      // would mean the next tick no longer has wasReset:true to re-trigger
-      // recovery with (the checkpoint would look valid again), so whatever
-      // recovery hadn't gotten to yet would never get a second chance.
-      const shouldAdvance = wasReset ? !hitBatchCap && !recoveryIncomplete : !hitBatchCap;
-      if (shouldAdvance) {
+      if (!hitBatchCap) {
         await supabase
           .from("connected_accounts")
           .update({ last_history_id: newHistoryId })

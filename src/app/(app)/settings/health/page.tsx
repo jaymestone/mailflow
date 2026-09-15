@@ -94,13 +94,16 @@ export default async function HealthPage() {
       </section>
 
       {(() => {
-        // Whenever a reply-poll-tick's saved history checkpoint turns out
-        // to be unusable, it falls back to a direct search to recover
-        // whatever might have arrived in the gap (see migration-adjacent
-        // change in reply/tick.ts, 2026-09-15) -- this used to be
-        // completely silent. Surfacing it here even when recovered
-        // count is 0 is deliberate: a reset happening at all is worth
-        // knowing about, not just a reset that lost something.
+        // Whenever a reply-poll-tick's saved history checkpoint turns out to
+        // be unusable, this used to be completely silent -- a real gap of
+        // unprocessed mail went unnoticed for ~2 hours on 2026-09-15 before
+        // this existed. A search-based auto-recovery was attempted the same
+        // day but caused repeated live timeouts and is TEMPORARILY DISABLED
+        // (see reply/tick.ts) pending investigation -- a reset still
+        // re-baselines and gets logged here, but the account's own gap
+        // (whatever arrived between the old checkpoint and now) is not
+        // currently being recovered automatically. Treat any entry here as
+        // a signal that account may need a manual look.
         const replyRow = (cronHealth ?? []).find((h) => h.job_name === "reply-poll-tick");
         const resets = (replyRow?.last_result?.historyResets ?? []) as { account: string; recovered: number }[];
         if (resets.length === 0) return null;
@@ -108,14 +111,14 @@ export default async function HealthPage() {
           <section className="mt-9">
             <h2 className="font-display text-[21px] font-medium text-ink">History checkpoint resets</h2>
             <p className="mt-1.5 text-pretty text-sm text-muted">
-              The most recent reply check found a saved checkpoint Gmail no longer recognized, and ran a direct
-              search to recover whatever might have arrived in the gap before continuing normally.
+              The most recent reply check found a saved checkpoint Gmail no longer recognized. Auto-recovery of
+              the resulting gap is temporarily disabled (it caused its own timeouts) — these accounts may have
+              unprocessed mail from before the reset that&apos;s worth a manual check.
             </p>
             <ul className="mt-3 space-y-1 text-sm">
               {resets.map((r, i) => (
                 <li key={i} className="text-ink-soft">
-                  <span className="text-ink">{r.account}</span> — recovered {r.recovered} message
-                  {r.recovered === 1 ? "" : "s"} from the gap
+                  <span className="text-ink">{r.account}</span>
                 </li>
               ))}
             </ul>

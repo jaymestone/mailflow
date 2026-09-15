@@ -172,4 +172,48 @@ describe("runReplyPollTick", () => {
     expect(updateEq).toHaveBeenCalledWith("id", "row-1");
     expect(result.messagesFetched).toBe(0); // not counted as a newly-fetched message, it's a retry
   });
+
+  // Confirmed live, 2026-09-15: without persisting where a truncated
+  // traversal left off, a high-volume account's checkpoint froze for hours
+  // -- every tick restarted from the same old point and never got far
+  // enough to reach its own new mail. This pins down that a truncated
+  // result stores the resume token (not the real checkpoint) and passes it
+  // back in on the next call.
+  it("persists the resume page token (not last_history_id) when pagination is truncated, and passes it to the next call", async () => {
+    listNewMessageIds.mockResolvedValueOnce({
+      messageIds: [],
+      newHistoryId: "50", // unchanged -- see gmail/history.ts, truncated never reports an advanced checkpoint
+      wasReset: false,
+      truncated: true,
+      nextPageToken: "page-2-token",
+    });
+
+    let capturedUpdate: Record<string, unknown> | undefined;
+    const updateEq = vi.fn(async () => ({ data: null, error: null }));
+    const supabaseAccounts = {
+      from: (table: string) => {
+        if (table === "connected_accounts") {
+          return {
+            select: () => ({
+              eq: () => ({
+                data: [{ id: "acc-1", email_address: "stone@jaymestone.com", last_history_id: "50", history_page_token: null }],
+                error: null,
+              }),
+            }),
+            update: (fields: Record<string, unknown>) => {
+              capturedUpdate = fields;
+              return { eq: updateEq };
+            },
+          };
+        }
+        return fakeSupabase().from(table);
+      },
+    } as unknown as SupabaseClient;
+
+    await runReplyPollTick(supabaseAccounts);
+
+    expect(listNewMessageIds).toHaveBeenCalledWith("fake-token", "50", null);
+    expect(capturedUpdate).toEqual({ history_page_token: "page-2-token" });
+    expect(updateEq).toHaveBeenCalledWith("id", "acc-1");
+  });
 });

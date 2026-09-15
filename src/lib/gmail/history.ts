@@ -21,9 +21,18 @@ const MAX_HISTORY_PAGES = 3;
 export async function listNewMessageIds(
   accessToken: string,
   startHistoryId: string,
-): Promise<{ messageIds: string[]; newHistoryId: string; wasReset: boolean; truncated: boolean }> {
+  // Resumes a previously-truncated traversal from an exact page instead of
+  // restarting from startHistoryId -- without this, a high-volume account
+  // whose backlog never fits within MAX_HISTORY_PAGES would re-fetch the
+  // exact same early pages every single tick forever, never actually
+  // reaching its own genuinely new/unprocessed messages. Confirmed live,
+  // 2026-09-15: stone@jaymestone.com's checkpoint froze for hours this way
+  // once bounded pagination shipped, while every lower-volume account
+  // advanced normally in the same window.
+  resumePageToken?: string | null,
+): Promise<{ messageIds: string[]; newHistoryId: string; wasReset: boolean; truncated: boolean; nextPageToken: string | null }> {
   const messageIds = new Set<string>();
-  let pageToken: string | undefined;
+  let pageToken: string | undefined = resumePageToken ?? undefined;
   let newHistoryId = startHistoryId;
   let pagesFetched = 0;
 
@@ -46,7 +55,13 @@ export async function listNewMessageIds(
       // exist between the old checkpoint and now, so it can fall back to a direct
       // search instead of silently treating this the same as "nothing new."
       if (res.status === 404) {
-        return { messageIds: [], newHistoryId: await getCurrentHistoryId(accessToken), wasReset: true, truncated: false };
+        return {
+          messageIds: [],
+          newHistoryId: await getCurrentHistoryId(accessToken),
+          wasReset: true,
+          truncated: false,
+          nextPageToken: null,
+        };
       }
       throw new Error(`Gmail history.list failed: ${res.status} ${await res.text()}`);
     }
@@ -63,21 +78,19 @@ export async function listNewMessageIds(
 
     if (pageToken && pagesFetched >= MAX_HISTORY_PAGES) {
       // More pages exist but stopping here to stay inside the time budget.
-      // truncated:true tells the caller NOT to advance the stored checkpoint
-      // to newHistoryId -- Gmail's per-page historyId reflects the mailbox's
-      // current state, not "as of this page," so trusting it here would
-      // silently skip whatever was on the unfetched remaining pages (the
-      // same class of bug the 404/reset handling above exists to avoid).
-      // Leaving the checkpoint where it was means the next tick re-fetches
-      // these same first MAX_HISTORY_PAGES pages -- cheap (existing-row
-      // skips) except for the couple of genuinely new messages each tick's
-      // own processing cap allows through, so this account drains
-      // gradually over successive ticks instead of ever timing out.
-      return { messageIds: [...messageIds], newHistoryId: startHistoryId, wasReset: false, truncated: true };
+      // truncated:true tells the caller NOT to advance the stored
+      // checkpoint to newHistoryId -- Gmail's per-page historyId reflects
+      // the mailbox's current state, not "as of this page," so trusting it
+      // here would silently skip whatever was on the unfetched remaining
+      // pages (the same class of bug the 404/reset handling above exists
+      // to avoid). nextPageToken lets the caller resume exactly here next
+      // time instead of restarting from startHistoryId -- see the
+      // resumePageToken parameter doc above for why that matters.
+      return { messageIds: [...messageIds], newHistoryId: startHistoryId, wasReset: false, truncated: true, nextPageToken: pageToken };
     }
   } while (pageToken);
 
-  return { messageIds: [...messageIds], newHistoryId, wasReset: false, truncated: false };
+  return { messageIds: [...messageIds], newHistoryId, wasReset: false, truncated: false, nextPageToken: null };
 }
 
 /** Direct message search, independent of the history-based incremental sync

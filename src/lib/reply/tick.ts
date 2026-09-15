@@ -411,7 +411,7 @@ export async function runReplyPollTick(supabase: SupabaseClient): Promise<ReplyT
   // while human replies land in whichever address is set as Reply-To.
   const { data: accounts } = await supabase
     .from("connected_accounts")
-    .select("id, email_address, last_history_id")
+    .select("id, email_address, last_history_id, history_page_token")
     .eq("status", "active");
 
   // Shared across the whole tick so each account's Gmail labels are listed
@@ -437,9 +437,10 @@ export async function runReplyPollTick(supabase: SupabaseClient): Promise<ReplyT
         continue;
       }
 
-      const { messageIds, newHistoryId, wasReset, truncated } = await listNewMessageIds(
+      const { messageIds, newHistoryId, wasReset, truncated, nextPageToken } = await listNewMessageIds(
         accessToken,
         account.last_history_id,
+        account.history_page_token,
       );
 
       let hitBatchCap = false;
@@ -464,20 +465,37 @@ export async function runReplyPollTick(supabase: SupabaseClient): Promise<ReplyT
         result.historyResets.push({ account: account.email_address, recovered: 0 });
       }
 
-      // Only advance the checkpoint once history.list actually got all the
-      // way through (not truncated -- see MAX_HISTORY_PAGES) AND the
-      // per-tick message-processing budget didn't cut the batch short.
-      // Either case left as-is means the next tick retries the same range;
-      // anything already processed this round is a cheap existing-row
-      // lookup, so only the still-unprocessed remainder costs real time,
-      // letting a large backlog drain gradually over successive ticks
-      // instead of ever needing to finish in one shot.
-      if (!hitBatchCap && !truncated) {
+      if (truncated) {
+        // Pagination itself didn't finish -- persist exactly where it left
+        // off so the next tick resumes from this page instead of
+        // restarting from last_history_id and re-fetching the same early
+        // pages forever (confirmed live, 2026-09-15: this is what froze
+        // stone@jaymestone.com's checkpoint for hours once bounded
+        // pagination shipped -- it never got far enough to see its own
+        // genuinely new mail). last_history_id itself stays untouched, same
+        // reasoning as before: it isn't safe to advance until the full
+        // traversal actually completes.
         await supabase
           .from("connected_accounts")
-          .update({ last_history_id: newHistoryId })
+          .update({ history_page_token: nextPageToken })
+          .eq("id", account.id);
+      } else if (!hitBatchCap) {
+        // Full traversal completed (or completed a resumed one) and the
+        // per-tick message budget didn't cut the batch short -- safe to
+        // advance the real checkpoint, and clear any leftover resume
+        // token so a future fresh traversal doesn't start from a stale
+        // page belonging to an old startHistoryId.
+        await supabase
+          .from("connected_accounts")
+          .update({ last_history_id: newHistoryId, history_page_token: null })
           .eq("id", account.id);
       }
+      // Remaining case (hitBatchCap but not truncated): pagination found
+      // the true bounds already, just the message-processing budget ran
+      // out first -- leave last_history_id as-is, same as before this
+      // page-token change, so the next tick simply re-fetches the same
+      // (now cheap, existing-row-skipped) range and continues where message
+      // processing left off.
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error";
       result.errors.push({ account: account.email_address, error: message });

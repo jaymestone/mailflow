@@ -10,7 +10,7 @@ export async function getCurrentHistoryId(accessToken: string): Promise<string> 
 export async function listNewMessageIds(
   accessToken: string,
   startHistoryId: string,
-): Promise<{ messageIds: string[]; newHistoryId: string }> {
+): Promise<{ messageIds: string[]; newHistoryId: string; wasReset: boolean }> {
   const messageIds = new Set<string>();
   let pageToken: string | undefined;
   let newHistoryId = startHistoryId;
@@ -28,9 +28,12 @@ export async function listNewMessageIds(
     );
     if (!res.ok) {
       // A 404 here means the startHistoryId is too old (Gmail only retains ~1 week of
-      // history); re-baseline from the current historyId rather than failing forever.
+      // history) or otherwise unrecognized -- re-baseline from the current historyId
+      // rather than failing forever. wasReset:true tells the caller a real gap may
+      // exist between the old checkpoint and now, so it can fall back to a direct
+      // search instead of silently treating this the same as "nothing new."
       if (res.status === 404) {
-        return { messageIds: [], newHistoryId: await getCurrentHistoryId(accessToken) };
+        return { messageIds: [], newHistoryId: await getCurrentHistoryId(accessToken), wasReset: true };
       }
       throw new Error(`Gmail history.list failed: ${res.status} ${await res.text()}`);
     }
@@ -45,5 +48,30 @@ export async function listNewMessageIds(
     pageToken = data.nextPageToken;
   } while (pageToken);
 
-  return { messageIds: [...messageIds], newHistoryId };
+  return { messageIds: [...messageIds], newHistoryId, wasReset: false };
+}
+
+/** Direct message search, independent of the history-based incremental sync
+ * above -- used as a recovery path when a history reset (see wasReset above)
+ * may have created a gap the incremental API can no longer see into. Gmail
+ * search query syntax (e.g. "newer_than:2d"), not a historyId. */
+export async function searchMessageIds(accessToken: string, query: string): Promise<string[]> {
+  const messageIds: string[] = [];
+  let pageToken: string | undefined;
+
+  do {
+    const params = new URLSearchParams({ q: query, maxResults: "50" });
+    if (pageToken) params.set("pageToken", pageToken);
+
+    const res = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages?${params.toString()}`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!res.ok) throw new Error(`Gmail messages.list failed: ${res.status} ${await res.text()}`);
+    const data = await res.json();
+
+    for (const m of data.messages ?? []) messageIds.push(m.id);
+    pageToken = data.nextPageToken;
+  } while (pageToken);
+
+  return messageIds;
 }

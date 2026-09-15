@@ -93,6 +93,36 @@ export default async function HealthPage() {
         </div>
       </section>
 
+      {(() => {
+        // Whenever a reply-poll-tick's saved history checkpoint turns out
+        // to be unusable, it falls back to a direct search to recover
+        // whatever might have arrived in the gap (see migration-adjacent
+        // change in reply/tick.ts, 2026-09-15) -- this used to be
+        // completely silent. Surfacing it here even when recovered
+        // count is 0 is deliberate: a reset happening at all is worth
+        // knowing about, not just a reset that lost something.
+        const replyRow = (cronHealth ?? []).find((h) => h.job_name === "reply-poll-tick");
+        const resets = (replyRow?.last_result?.historyResets ?? []) as { account: string; recovered: number }[];
+        if (resets.length === 0) return null;
+        return (
+          <section className="mt-9">
+            <h2 className="font-display text-[21px] font-medium text-ink">History checkpoint resets</h2>
+            <p className="mt-1.5 text-pretty text-sm text-muted">
+              The most recent reply check found a saved checkpoint Gmail no longer recognized, and ran a direct
+              search to recover whatever might have arrived in the gap before continuing normally.
+            </p>
+            <ul className="mt-3 space-y-1 text-sm">
+              {resets.map((r, i) => (
+                <li key={i} className="text-ink-soft">
+                  <span className="text-ink">{r.account}</span> — recovered {r.recovered} message
+                  {r.recovered === 1 ? "" : "s"} from the gap
+                </li>
+              ))}
+            </ul>
+          </section>
+        );
+      })()}
+
       <section className="mt-9">
         <h2 className="font-display text-[21px] font-medium text-ink">Send lock</h2>
         <p className="mt-1.5 text-pretty text-sm text-muted">

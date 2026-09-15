@@ -125,4 +125,51 @@ describe("runReplyPollTick", () => {
     expect(result.historyResets).toEqual([{ account: "stone@jaymestone.com", recovered: 0 }]);
     expect(updateEq).toHaveBeenCalledWith("id", "acc-1"); // checkpoint still re-baselines to newHistoryId
   });
+
+  // The actual fix for what Jayme reported live on 2026-09-15: a message
+  // already classified and recorded, but whose Gmail label never
+  // successfully applied (e.g. hit a rate limit), used to be permanently
+  // invisible to every future poll -- the existing-row check treated
+  // "recorded" as "fully done" with no way to tell the two states apart.
+  it("retries only the label step for an already-recorded message whose label never applied, without reclassifying", async () => {
+    listNewMessageIds.mockResolvedValueOnce({ messageIds: ["msg-1"], newHistoryId: "100", wasReset: false });
+    fetchGmailMessage.mockResolvedValueOnce(fakeEmail({ labelIds: ["INBOX"] }));
+
+    const { applyGmailLabel } = await import("@/lib/gmail/labels");
+    const { classifyReply } = await import("./classify");
+    vi.mocked(classifyReply).mockClear();
+    vi.mocked(applyGmailLabel).mockClear();
+    const updateEq = vi.fn(async () => ({ data: null, error: null }));
+
+    const supabaseAccounts = {
+      from: (table: string) => {
+        if (table === "connected_accounts") {
+          return { select: () => ({ eq: () => ({ data: [{ id: "acc-1", email_address: "stone@jaymestone.com", last_history_id: "50" }], error: null }) }) };
+        }
+        if (table === "inbound_messages") {
+          return {
+            select: () => ({
+              eq: () => ({
+                eq: () => ({
+                  maybeSingle: async () => ({
+                    data: { id: "row-1", classification_category: "interested", label_applied_at: null },
+                    error: null,
+                  }),
+                }),
+              }),
+            }),
+            update: () => ({ eq: updateEq }),
+          };
+        }
+        return fakeSupabase().from(table);
+      },
+    } as unknown as SupabaseClient;
+
+    const result = await runReplyPollTick(supabaseAccounts);
+
+    expect(classifyReply).not.toHaveBeenCalled();
+    expect(applyGmailLabel).toHaveBeenCalledWith("fake-token", "msg-1", "label-123", undefined);
+    expect(updateEq).toHaveBeenCalledWith("id", "row-1");
+    expect(result.messagesFetched).toBe(0); // not counted as a newly-fetched message, it's a retry
+  });
 });

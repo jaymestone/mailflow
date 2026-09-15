@@ -30,7 +30,7 @@ export default async function InboxPage({
   let query = supabase
     .from("inbound_messages")
     .select(
-      "id, from_email, from_name, subject, body_text, received_at, classification_category, match_method, gmail_thread_id, campaign:campaigns(name)",
+      "id, from_email, from_name, subject, body_text, received_at, classification_category, match_method, gmail_thread_id, campaign:campaigns(name), connected_account:connected_accounts(email_address)",
     )
     .eq("message_type", "reply")
     .order("received_at", { ascending: false })
@@ -79,6 +79,7 @@ export default async function InboxPage({
       <div className="mt-3">
         {(messages ?? []).map((m) => {
           const campaign = Array.isArray(m.campaign) ? m.campaign[0] : m.campaign;
+          const connectedAccount = Array.isArray(m.connected_account) ? m.connected_account[0] : m.connected_account;
           return (
             <div
               key={m.id}
@@ -95,9 +96,14 @@ export default async function InboxPage({
                   <span>{new Date(m.received_at).toLocaleString()}</span>
                   {campaign?.name && <span>· {campaign.name}</span>}
                   <span>· matched via {m.match_method}</span>
-                  {m.gmail_thread_id && (
+                  {m.gmail_thread_id && connectedAccount?.email_address && (
                     <a
-                      href={`https://mail.google.com/mail/u/0/#all/${m.gmail_thread_id}`}
+                      // authuser picks the Gmail account by actual email address, not a
+                      // browser-session-dependent numeric slot (u/0, u/1, ...) that has no
+                      // relationship to which account the message actually lives in -- the
+                      // hardcoded u/0 this replaced could open a completely different Google
+                      // account than the one that received this message.
+                      href={`https://mail.google.com/mail/?authuser=${encodeURIComponent(connectedAccount.email_address)}#all/${m.gmail_thread_id}`}
                       target="_blank"
                       rel="noreferrer"
                       className="text-accent"

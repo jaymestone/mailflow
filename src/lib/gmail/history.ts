@@ -19,7 +19,7 @@ export async function getCurrentHistoryId(accessToken: string): Promise<string> 
 // caps) were tried and reverted chasing this same symptom before this was
 // found -- worth remembering next time something in this tick times out
 // that this unbounded page loop is the first thing to suspect.
-const MAX_HISTORY_PAGES = 5;
+const MAX_HISTORY_PAGES = 1;
 
 export async function listNewMessageIds(
   accessToken: string,

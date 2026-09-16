@@ -48,6 +48,20 @@ export async function runReplacementResearchTick(supabase: SupabaseClient): Prom
 
   for (const item of pending ?? []) {
     result.processed++;
+    // Written BEFORE the risky call below, not just on a caught error --
+    // confirmed in production (see BATCH_SIZE's own comment) that a
+    // research lookup can run long enough to hit the external platform's
+    // hard kill, which terminates the whole request before any code of
+    // ours (including a catch block) gets to run. Since BATCH_SIZE=1
+    // always re-fetches the same oldest pending row, a kill mid-lookup
+    // with the old catch-only increment would leave that row's attempt
+    // count exactly where it started -- meaning MAX_RESEARCH_ATTEMPTS
+    // would never trip, and that one venue would block the entire queue
+    // forever with no self-healing (unlike the send lock, there's nothing
+    // here that expires on its own). Pre-incrementing means even a silent
+    // external kill still counts as a used attempt.
+    const attempts = (item.research_attempts ?? 0) + 1;
+    await supabase.from("replacement_queue").update({ research_attempts: attempts }).eq("id", item.id);
     try {
       if (!item.venue) {
         // Nothing to research without a venue name to search for.
@@ -160,7 +174,6 @@ export async function runReplacementResearchTick(supabase: SupabaseClient): Prom
       const message = err instanceof Error ? err.message : "Unknown error";
       result.errors.push({ id: item.id, error: message });
 
-      const attempts = (item.research_attempts ?? 0) + 1;
       if (attempts >= MAX_RESEARCH_ATTEMPTS) {
         // Deterministically stuck (e.g. a search that reliably needs more
         // time than the per-call timeout allows) — give up so it stops

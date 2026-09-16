@@ -36,8 +36,16 @@ async function geocodeOne(row: GeoLocationRow): Promise<
   if (row.country) params.set("country", row.country);
 
   try {
+    // Without an explicit timeout, a slow/hanging Nominatim connection (a
+    // free, rate-limited public service) has no ceiling of its own -- it
+    // would just sit until the external platform's own hard kill catches
+    // it, at whatever point that happens to fall relative to
+    // BATCH_SIZE * REQUEST_SPACING_MS's already-tight budget. Failing this
+    // one request fast and falling through to the normal retry-next-run
+    // path is safer than letting it run unbounded.
     const res = await fetch(`https://nominatim.openstreetmap.org/search?${params.toString()}`, {
       headers: { "User-Agent": NOMINATIM_USER_AGENT },
+      signal: AbortSignal.timeout(8_000),
     });
     if (!res.ok) return { outcome: "error", message: `HTTP ${res.status}` };
 

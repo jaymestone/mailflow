@@ -72,7 +72,12 @@ describe("reprocessStuckMessages", () => {
     expect(result.replyCandidateCount).toBe(0);
   });
 
-  it("live run: processes bounces before replies, and reports what processOneMessage did", async () => {
+  // Confirmed live, 2026-09-16: a real run against a high-volume account
+  // processed bounces first (the original order) and that alone consumed
+  // the entire time budget -- every genuine reply, the actual reason a
+  // human ran this, never got a turn. Replies now go first specifically so
+  // bounce volume can never starve them again.
+  it("live run: processes replies before bounces, and reports what processOneMessage did", async () => {
     mockGmailSearch(["b1", "r1"]);
     fetchGmailMessage.mockResolvedValueOnce(fakeEmail({ gmailMessageId: "b1" })).mockResolvedValueOnce(fakeEmail({ gmailMessageId: "r1" }));
     classifyBounce.mockReturnValueOnce({ isBounce: true, isHard: true }).mockReturnValueOnce({ isBounce: false, isHard: false });
@@ -87,7 +92,7 @@ describe("reprocessStuckMessages", () => {
 
     const result = await reprocessStuckMessages(fakeSupabase(), { dryRun: false });
 
-    expect(callOrder).toEqual(["b1", "r1"]);
+    expect(callOrder).toEqual(["r1", "b1"]);
     expect(result.bounceResult.bounces).toBe(1);
     expect(result.replyResult.replies).toBe(1);
     expect(result.truncated).toBe(false);
@@ -108,7 +113,7 @@ describe("reprocessStuckMessages", () => {
     expect(capturedUrl).toContain("newer_than%3A14d"); // MAX_WINDOW_DAYS
   });
 
-  it("caps a real run at maxMessages, prioritizing bounces, and reports truncated", async () => {
+  it("caps a real run at maxMessages, prioritizing replies, and reports truncated", async () => {
     mockGmailSearch(["b1", "b2", "r1"]);
     fetchGmailMessage
       .mockResolvedValueOnce(fakeEmail({ gmailMessageId: "b1" }))
@@ -130,7 +135,27 @@ describe("reprocessStuckMessages", () => {
     expect(result.bounceCandidateCount).toBe(2);
     expect(result.replyCandidateCount).toBe(1);
     expect(result.truncated).toBe(true);
-    // Only 1 slot total, spent on a bounce -- the reply never runs this call.
-    expect(processed).toEqual(["b1"]);
+    // Only 1 slot total, spent on the reply -- neither bounce runs this call.
+    expect(processed).toEqual(["r1"]);
+  });
+
+  it("stops cleanly and reports truncated once the soft time deadline has elapsed, instead of running unbounded", async () => {
+    mockGmailSearch(["r1", "r2"]);
+    fetchGmailMessage.mockResolvedValueOnce(fakeEmail({ gmailMessageId: "r1" })).mockResolvedValueOnce(fakeEmail({ gmailMessageId: "r2" }));
+    classifyBounce.mockReturnValueOnce({ isBounce: false, isHard: false }).mockReturnValueOnce({ isBounce: false, isHard: false });
+
+    const processed: string[] = [];
+    processOneMessage.mockImplementation(async (_s, _a, messageId: string) => {
+      processed.push(messageId);
+      return "processed";
+    });
+
+    // Deadline already elapsed before this call even starts -- proves the
+    // check actually stops work (here, before discovery even finishes
+    // bucketing candidates) rather than only existing on paper.
+    const result = await reprocessStuckMessages(fakeSupabase(), { dryRun: false, softDeadlineMs: -1 });
+
+    expect(result.truncated).toBe(true);
+    expect(processed).toEqual([]);
   });
 });

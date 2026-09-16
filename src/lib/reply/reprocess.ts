@@ -9,6 +9,20 @@ const CATEGORY_LABELS = ["Interested", "Not Interested", "Follow Up", "Out of Of
 const DEFAULT_WINDOW_DAYS = 3;
 const MAX_WINDOW_DAYS = 14;
 
+// Confirmed live, 2026-09-16: a real run against a high-volume account
+// (stone@jaymestone.com, hundreds of bounces in-window) processed bounces
+// first, exactly as originally designed here -- and that alone consumed
+// the entire request before a single genuine reply (where every one of
+// that day's actually-important stuck messages lived) ever got a turn.
+// The function almost certainly hit Vercel's hard maxDuration kill with no
+// graceful stop, no partial-truncation signal, nothing -- just silence.
+// Two changes: replies now run BEFORE bounces (they're rare and valuable;
+// bounces are numerous and low-stakes, so doing replies first means they
+// almost always finish regardless of bounce volume), and both loops watch
+// a soft internal deadline so a real timeout produces a clean, reported
+// truncation instead of being silently killed mid-request.
+const DEFAULT_SOFT_DEADLINE_MS = 240_000; // leaves ~60s headroom under the 300s admin route
+
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -73,12 +87,15 @@ export type ReprocessResult = {
  * processOneMessage pipeline (classify, match, insert, suppress/pause/
  * label), exactly as a normal tick would have.
  *
- * Runs bounces first, then genuine replies/auto-replies, mirroring the
- * tick's own cheap/expensive split: bounces are fast and deterministic
- * (no LLM call), while replies need a real classifyReply call and can
- * trigger real consequences (matching, suppression, pausing a live
- * campaign contact) -- worth being able to see that split in the result
- * even when both run in the same call.
+ * Runs genuine replies/auto-replies first, then bounces -- the reverse of
+ * the tick's own cheap-before-expensive priority, deliberately: replies
+ * are rare and are the actual reason a human is running this, while
+ * bounces are numerous, low-stakes housekeeping that can (and did, live,
+ * 2026-09-16) consume an entire run's time budget by volume alone if they
+ * go first, starving every genuine reply out of the run. Both passes, and
+ * discovery itself, respect an internal soft time deadline (see
+ * DEFAULT_SOFT_DEADLINE_MS) so a real timeout produces a clean, reported
+ * truncation instead of running until the platform kills the request.
  *
  * This is the library form of what was, on 2026-09-16, a hand-written
  * one-off script (scripts/recover-backlog.ts) -- built into the app so
@@ -87,11 +104,14 @@ export type ReprocessResult = {
  * cron/reprocess-backlog safety net. */
 export async function reprocessStuckMessages(
   supabase: SupabaseClient,
-  opts: { dryRun?: boolean; windowDays?: number; maxMessages?: number } = {},
+  opts: { dryRun?: boolean; windowDays?: number; maxMessages?: number; softDeadlineMs?: number } = {},
 ): Promise<ReprocessResult> {
   const dryRun = opts.dryRun ?? false;
   const windowDays = Math.min(Math.max(opts.windowDays ?? DEFAULT_WINDOW_DAYS, 1), MAX_WINDOW_DAYS);
   const maxMessages = opts.maxMessages ?? Number.POSITIVE_INFINITY;
+  const softDeadlineMs = opts.softDeadlineMs ?? DEFAULT_SOFT_DEADLINE_MS;
+  const startedAt = Date.now();
+  const timeIsUp = () => Date.now() - startedAt > softDeadlineMs;
 
   const { data: accounts, error } = await supabase.from("connected_accounts").select("id, email_address").eq("status", "active");
   if (error) throw error;
@@ -112,7 +132,8 @@ export async function reprocessStuckMessages(
     return token;
   }
 
-  for (const account of accounts ?? []) {
+  let discoveryTruncated = false;
+  discoveryLoop: for (const account of accounts ?? []) {
     const accessToken = await tokenFor(account.id);
     let pageToken: string | undefined;
     const ids: string[] = [];
@@ -128,6 +149,10 @@ export async function reprocessStuckMessages(
     } while (pageToken && ids.length < 1000);
 
     for (const id of ids) {
+      if (timeIsUp()) {
+        discoveryTruncated = true;
+        break discoveryLoop;
+      }
       try {
         // Read-only routing check -- SENT copies and already-recorded
         // messages are re-checked for real (and safely skipped) inside
@@ -149,34 +174,49 @@ export async function reprocessStuckMessages(
   const replyResult = freshTickResult();
 
   const totalCandidates = bounceCandidates.length + replyCandidates.length;
-  const truncated = totalCandidates > maxMessages;
-  // Bounces first, replies second, same priority as the tick's own
-  // cheap-before-expensive budget split -- if the cap cuts the batch
-  // short, it's the slower/riskier reply pass that gets deferred, not the
-  // fast mechanical bounce cleanup.
-  const boundedBounces = bounceCandidates.slice(0, maxMessages);
-  const remainingForReplies = Math.max(maxMessages - boundedBounces.length, 0);
-  const boundedReplies = replyCandidates.slice(0, remainingForReplies);
+  const capTruncated = totalCandidates > maxMessages;
+  let deadlineTruncated = discoveryTruncated;
+
+  // Replies first, bounces second -- the reverse of the automated tick's
+  // own cheap-before-expensive priority, deliberately: genuine replies are
+  // rare and are the actual reason a human clicked this button, while
+  // bounces are numerous, low-stakes housekeeping. Putting replies first
+  // means they almost always finish inside the time budget regardless of
+  // how much bounce volume is waiting behind them, instead of bounce
+  // volume alone being able to starve every genuine reply out of a run
+  // entirely (confirmed live, 2026-09-16 -- see the comment on
+  // DEFAULT_SOFT_DEADLINE_MS above).
+  const boundedReplies = replyCandidates.slice(0, maxMessages);
+  const remainingForBounces = Math.max(maxMessages - boundedReplies.length, 0);
+  const boundedBounces = bounceCandidates.slice(0, remainingForBounces);
 
   if (!dryRun) {
-    const bounceLabelCache = new Map<string, string>();
-    const bounceBudget = { cheap: Number.MAX_SAFE_INTEGER, expensive: Number.MAX_SAFE_INTEGER };
-    for (const c of boundedBounces) {
+    const replyLabelCache = new Map<string, string>();
+    const replyBudget = { cheap: Number.MAX_SAFE_INTEGER, expensive: Number.MAX_SAFE_INTEGER };
+    for (const c of boundedReplies) {
+      if (timeIsUp()) {
+        deadlineTruncated = true;
+        break;
+      }
       try {
         const accessToken = await tokenFor(c.account.id);
-        await withRetry(() => processOneMessage(supabase, c.account, c.gmailMessageId, accessToken, bounceLabelCache, bounceResult, bounceBudget));
+        await withRetry(() => processOneMessage(supabase, c.account, c.gmailMessageId, accessToken, replyLabelCache, replyResult, replyBudget));
         await sleep(150);
       } catch (err) {
         errors.push({ account: c.account.email_address, gmailMessageId: c.gmailMessageId, error: err instanceof Error ? err.message : String(err) });
       }
     }
 
-    const replyLabelCache = new Map<string, string>();
-    const replyBudget = { cheap: Number.MAX_SAFE_INTEGER, expensive: Number.MAX_SAFE_INTEGER };
-    for (const c of boundedReplies) {
+    const bounceLabelCache = new Map<string, string>();
+    const bounceBudget = { cheap: Number.MAX_SAFE_INTEGER, expensive: Number.MAX_SAFE_INTEGER };
+    for (const c of boundedBounces) {
+      if (timeIsUp()) {
+        deadlineTruncated = true;
+        break;
+      }
       try {
         const accessToken = await tokenFor(c.account.id);
-        await withRetry(() => processOneMessage(supabase, c.account, c.gmailMessageId, accessToken, replyLabelCache, replyResult, replyBudget));
+        await withRetry(() => processOneMessage(supabase, c.account, c.gmailMessageId, accessToken, bounceLabelCache, bounceResult, bounceBudget));
         await sleep(150);
       } catch (err) {
         errors.push({ account: c.account.email_address, gmailMessageId: c.gmailMessageId, error: err instanceof Error ? err.message : String(err) });
@@ -189,7 +229,7 @@ export async function reprocessStuckMessages(
     dryRun,
     bounceCandidateCount: bounceCandidates.length,
     replyCandidateCount: replyCandidates.length,
-    truncated,
+    truncated: capTruncated || deadlineTruncated,
     bounceResult,
     replyResult,
     errors,

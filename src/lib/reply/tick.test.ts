@@ -255,4 +255,57 @@ describe("runReplyPollTick", () => {
     // Only 2 of the 3 replies fit inside the conservative expensive budget.
     expect(classifyReply).toHaveBeenCalledTimes(2);
   });
+
+  // The actual bug behind what Jayme reported live on 2026-09-16: two
+  // genuine replies vanished with no inbound_messages row at all -- traced
+  // to the checkpoint only being held back when BOTH budgets were fully
+  // drained, even though processOneMessage itself bails (with nothing
+  // written) the moment its OWN bucket hits zero. A message needing the
+  // cheap bucket after it's spent gets silently dropped mid-list while the
+  // expensive bucket still has room, the old both-exhausted check never
+  // trips, and the checkpoint advances past it as if the tick fully
+  // succeeded -- permanently, since Gmail history never resurfaces an
+  // already-passed message. This proves the checkpoint now stays put
+  // whenever *either* bucket ran out mid-list, not just when both did.
+  it("does not advance the checkpoint when the cheap budget runs out mid-list even though the expensive budget still has room", async () => {
+    // 9 bounces -- cheap budget is 8, so the 9th needs a bucket that's
+    // already spent. No genuine replies at all, so expensive budget (2)
+    // never gets touched and stays available the whole time.
+    const messageIds = ["b1", "b2", "b3", "b4", "b5", "b6", "b7", "b8", "b9"];
+    listNewMessageIds.mockResolvedValueOnce({ messageIds, newHistoryId: "999", wasReset: false, truncated: false, nextPageToken: null });
+
+    classifyBounce.mockReset();
+    for (const id of messageIds) {
+      classifyBounce.mockReturnValueOnce({ isBounce: true, isHard: true });
+      fetchGmailMessage.mockResolvedValueOnce(fakeEmail({ gmailMessageId: id, labelIds: ["INBOX"] }));
+    }
+
+    let capturedUpdate: Record<string, unknown> | undefined;
+    const updateEq = vi.fn(async () => ({ data: null, error: null }));
+    const supabaseAccounts = {
+      from: (table: string) => {
+        if (table === "connected_accounts") {
+          return {
+            select: () => ({ eq: () => ({ data: [{ id: "acc-1", email_address: "stone@jaymestone.com", last_history_id: "50", history_page_token: null }], error: null }) }),
+            update: (fields: Record<string, unknown>) => {
+              capturedUpdate = fields;
+              return { eq: updateEq };
+            },
+          };
+        }
+        return fakeSupabase().from(table);
+      },
+    } as unknown as SupabaseClient;
+
+    const result = await runReplyPollTick(supabaseAccounts);
+
+    // Only the first 8 bounces fit inside the cheap budget.
+    expect(result.bounces).toBe(8);
+    // The checkpoint must NOT have been advanced to the new historyId --
+    // the 9th bounce was never actually looked at, so connected_accounts
+    // is never updated at all this tick (neither the "full traversal
+    // completed" branch nor the truncated-resume branch applies).
+    expect(updateEq).not.toHaveBeenCalled();
+    expect(capturedUpdate).toBeUndefined();
+  });
 });

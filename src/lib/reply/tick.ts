@@ -129,11 +129,11 @@ async function retryLabelOnly(
   labelCache: Map<string, string>,
   existing: { id: string; classification_category: ReplyCategory | null },
   budget: MessageBudget,
-): Promise<"processed" | "skipped"> {
+): Promise<"processed" | "skipped" | "budget-exhausted"> {
   if (!existing.classification_category) return "skipped"; // shouldn't happen, but nothing sane to label with
   // No LLM call here (reusing the already-stored category) -- counts
   // against the cheap budget, same as a bounce.
-  if (budget.cheap <= 0) return "skipped"; // retried again next tick
+  if (budget.cheap <= 0) return "budget-exhausted"; // retried again next tick
   budget.cheap--;
   const email = await fetchGmailMessage(accessToken, messageId);
   await applyCategoryLabel(accessToken, account.id, email.gmailMessageId, existing.classification_category, email.labelIds, labelCache);
@@ -150,7 +150,17 @@ async function retryLabelOnly(
  * actually went through the full pipeline (used by the caller to track its
  * per-tick budget); "skipped" covers everything else (already recorded,
  * our own sent copy, or an error that was itself already handled/logged
- * internally, matching the original inline behavior exactly). */
+ * internally, matching the original inline behavior exactly). A third
+ * outcome, "budget-exhausted", covers the specific case where this message
+ * needed a budget bucket (cheap or expensive) that was already spent this
+ * tick -- distinct from a plain "skipped" because the caller must not let
+ * the checkpoint advance past a message that was never actually looked at,
+ * even if the *other* bucket still had room left (see hitBatchCap below --
+ * confirmed live, 2026-09-16: two genuine replies vanished with no
+ * inbound_messages row at all, because cheap ran out mid-list while
+ * expensive still had headroom, so the old both-exhausted check never
+ * tripped and the checkpoint sailed past them as if the tick had fully
+ * succeeded). */
 async function processOneMessage(
   supabase: SupabaseClient,
   account: { id: string; email_address: string },
@@ -159,7 +169,7 @@ async function processOneMessage(
   labelCache: Map<string, string>,
   result: ReplyTickResult,
   budget: MessageBudget,
-): Promise<"processed" | "skipped"> {
+): Promise<"processed" | "skipped" | "budget-exhausted"> {
   try {
     const { data: existing } = await supabase
       .from("inbound_messages")
@@ -197,10 +207,10 @@ async function processOneMessage(
     // nothing behind, so this message is cleanly retried on a later tick,
     // same as hitting the old single shared cap used to behave.
     if (bounceInfo.isBounce) {
-      if (budget.cheap <= 0) return "skipped";
+      if (budget.cheap <= 0) return "budget-exhausted";
       budget.cheap--;
     } else {
-      if (budget.expensive <= 0) return "skipped";
+      if (budget.expensive <= 0) return "budget-exhausted";
       budget.expensive--;
     }
 
@@ -511,7 +521,13 @@ export async function runReplyPollTick(supabase: SupabaseClient): Promise<ReplyT
           hitBatchCap = true;
           break;
         }
-        await processOneMessage(supabase, account, messageId, accessToken, labelCache, result, budget);
+        const outcome = await processOneMessage(supabase, account, messageId, accessToken, labelCache, result, budget);
+        // A message that needed the specific bucket (cheap or expensive)
+        // already spent this tick was never actually looked at -- the
+        // checkpoint must not advance past it even though the *other*
+        // bucket may still have room, or it's gone for good (see the
+        // comment on processOneMessage's return type above).
+        if (outcome === "budget-exhausted") hitBatchCap = true;
       }
 
       // Search-based recovery on a reset checkpoint is still disabled (see

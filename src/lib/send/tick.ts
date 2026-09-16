@@ -51,6 +51,20 @@ const DEFAULT_BATCH_LIMIT = 20;
 // the actual real-send pacing limit itself.
 const CANDIDATE_FETCH_LIMIT = 500;
 
+// Confirmed live, 2026-09-16: a tick ran long enough to hit cron-job.org's
+// hard 30s kill (see DEFAULT_BATCH_LIMIT above for why that, not Vercel's
+// own 60s maxDuration, is the real ceiling) while holding the send lock --
+// the external kill terminates the whole invocation, so the `finally`
+// block below that releases the lock never got to run, and every send
+// this system attempted was blocked for the next ~5 minutes until the
+// lock's own self-expiry caught up. DEFAULT_BATCH_LIMIT was already tuned
+// to normally fit well inside 30s, but "normally" isn't a guarantee --
+// this is the actual guardrail: the loop checks its own elapsed time and
+// stops itself with room to spare, so the lock is reliably released
+// through normal control flow instead of gambling on every tick finishing
+// before an external, uncatchable kill.
+const SOFT_DEADLINE_MS = 22_000;
+
 type DueMember = {
   campaign_member_id: string;
   campaign_id: string;
@@ -115,8 +129,12 @@ function fetchPriorSends(supabase: SupabaseClient, member: DueMember) {
 
 export async function runSendTick(
   supabase: SupabaseClient,
-  opts: { dryRun?: boolean; ignoreSendWindow?: boolean } = {},
+  opts: { dryRun?: boolean; ignoreSendWindow?: boolean; softDeadlineMs?: number } = {},
 ): Promise<SendTickResult> {
+  const startedAt = Date.now();
+  const softDeadlineMs = opts.softDeadlineMs ?? SOFT_DEADLINE_MS;
+  const timeIsUp = () => Date.now() - startedAt > softDeadlineMs;
+
   const result: SendTickResult = {
     attempted: 0,
     sent: 0,
@@ -205,6 +223,14 @@ export async function runSendTick(
       // this many, regardless of how many more candidates remain in the
       // (deliberately oversized) pool fetched above.
       if (result.sent >= batchLimit) break;
+
+      // See SOFT_DEADLINE_MS above -- stop with room to spare rather than
+      // risk cron-job.org's external kill terminating this invocation
+      // before the `finally` block below ever gets to release the lock.
+      if (timeIsUp()) {
+        result.details.push({ email: "", outcome: "stopped early: approaching the tick's soft time deadline" });
+        break;
+      }
 
       result.attempted++;
 

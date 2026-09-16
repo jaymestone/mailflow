@@ -234,3 +234,41 @@ describe("runSendTick candidate pool vs. per-tick domain cap", () => {
     expect(result.sent).toBe(20);
   });
 });
+
+// Confirmed live, 2026-09-16: a tick ran long enough to hit cron-job.org's
+// external 30s kill while holding the send lock. That kill terminates the
+// whole invocation, so the `finally` block that releases the lock never
+// runs -- every send stayed blocked for the next ~5 minutes until the
+// lock's own self-expiry caught up. This proves the tick now stops itself,
+// through normal control flow, before that external kill can happen.
+describe("runSendTick soft time deadline", () => {
+  it("stops early once the soft deadline has elapsed, instead of running unbounded", async () => {
+    const manyDistinctDomains = Array.from({ length: 60 }, (_, i) =>
+      dueMember({
+        campaign_member_id: `cm-${i}`,
+        contact_id: `contact-${i}`,
+        current_step: 0,
+        next_step: 1,
+        email: `venue${i}@domain${i}.example`,
+        recipient_domain: `domain${i}.example`,
+      }),
+    );
+
+    const supabase = mockSupabase(
+      {
+        app_settings: [{ key: "round_robin_cursor", value: -1 }],
+        connected_accounts: [{ ...account("acc-a"), ramp_schedule: HIGH_RAMP }],
+        send_counters: [],
+        outbound_sends: [],
+      },
+      { send_engine_who_is_due: manyDistinctDomains },
+    );
+
+    // Deadline already elapsed before the loop even starts -- proves the
+    // check actually stops work rather than only existing on paper.
+    const result = await runSendTick(supabase, { dryRun: true, ignoreSendWindow: true, softDeadlineMs: -1 });
+
+    expect(result.sent).toBe(0);
+    expect(result.details.some((d) => d.outcome.includes("soft time deadline"))).toBe(true);
+  });
+});

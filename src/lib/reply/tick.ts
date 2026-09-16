@@ -4,7 +4,7 @@ import { getCurrentHistoryId, listNewMessageIds, searchMessageIds } from "@/lib/
 import { fetchGmailMessage } from "@/lib/gmail/messages";
 import { applyGmailLabel, CATEGORY_LABEL_NAMES, getOrCreateLabelId } from "@/lib/gmail/labels";
 import { OAuthTokenRevokedError } from "@/lib/oauth/google";
-import { classifyBounce } from "./bounceDetection";
+import { classifyBounce, extractBouncedRecipientCandidates } from "./bounceDetection";
 import { matchInboundMessage } from "./matching";
 import { classifyReply } from "./classify";
 import type { ReplyCategory } from "./types";
@@ -284,6 +284,44 @@ export async function processOneMessage(
     // may well still be good on the next attempt.
     const isHardBounce = category === "bounce" && bounceInfo.isHard;
 
+    // A DSN's own From: header is always the *sending* mail server
+    // (mailer-daemon@, postmaster@) — never the real recipient whose
+    // address actually failed. When In-Reply-To/References threading
+    // can't match a bounce back to the original send (broken or stripped
+    // by the recipient's mail system — confirmed live 2026-09-16: 49 real
+    // hard bounces sat unmatched this way in a single day, silently left
+    // unsuppressed and still active in their campaigns until manually
+    // found after the fact), the DSN body itself almost always still
+    // names the failed address directly. Try to recover the real contact
+    // from it before giving up on cleanup entirely.
+    let recoveredContactId: string | null = null;
+    if (isHardBounce && !match.contactId) {
+      const { data: allAccounts } = await supabase.from("connected_accounts").select("email_address");
+      const candidates = extractBouncedRecipientCandidates(email.bodyText, [
+        email.fromEmail,
+        ...(allAccounts ?? []).map((a) => a.email_address),
+      ]);
+      for (const candidate of candidates) {
+        const { data: candidateContact } = await supabase.from("contacts").select("id").ilike("email", candidate).maybeSingle();
+        if (!candidateContact) continue;
+        const { data: activeMember } = await supabase
+          .from("campaign_members")
+          .select("id")
+          .eq("contact_id", candidateContact.id)
+          .eq("member_status", "active")
+          .limit(1)
+          .maybeSingle();
+        if (activeMember) {
+          recoveredContactId = candidateContact.id;
+          break;
+        }
+      }
+    }
+    // match.contactId (a real thread match) always wins when present;
+    // recoveredContactId only ever gets set above for an unmatched hard
+    // bounce, so this is a no-op for every other category.
+    const effectiveContactId = match.contactId ?? recoveredContactId;
+
     // Captured before the ooo_departed pause step below flips these
     // to 'paused' — so a later replacement contact can be re-enrolled
     // in the campaigns this contact was actually being pursued in,
@@ -291,29 +329,46 @@ export async function processOneMessage(
     // Only needed for the two reasons that actually queue for
     // replacement research below — opt_out never does (see there).
     let activeCampaignIds: string[] = [];
-    if ((isHardBounce || category === "ooo_departed") && match.contactId) {
+    if ((isHardBounce || category === "ooo_departed") && effectiveContactId) {
       const { data: memberships } = await supabase
         .from("campaign_members")
         .select("campaign_id")
-        .eq("contact_id", match.contactId)
+        .eq("contact_id", effectiveContactId)
         .eq("member_status", "active");
       activeCampaignIds = (memberships ?? []).map((m) => m.campaign_id);
     }
 
+    // Fetched once, early, so both the suppression email below and the
+    // replacement-queue insert further down share the same real contact
+    // record instead of querying it twice.
+    let effectiveContact: { email: string; venue: string | null; venue_type: string | null; city: string | null; state: string | null; country: string | null; list_id: string | null } | null = null;
+    if (effectiveContactId && (isHardBounce || category === "ooo_departed")) {
+      const { data } = await supabase
+        .from("contacts")
+        .select("email, venue, venue_type, city, state, country, list_id")
+        .eq("id", effectiveContactId)
+        .maybeSingle();
+      effectiveContact = data ?? null;
+    }
+
     if (isHardBounce || category === "opt_out" || category === "ooo_departed") {
+      // A bounce's real target is the resolved contact's own address, not
+      // the DSN sender — opt_out/ooo_departed are genuine replies FROM
+      // the contact, where email.fromEmail is already correct as-is.
+      const suppressionEmail = category === "bounce" ? (effectiveContact?.email ?? email.fromEmail) : email.fromEmail;
       // suppression.email has an expression unique index (lower(email)), which
       // Supabase's upsert onConflict can't target directly — check-then-insert instead.
       const { data: alreadySuppressed } = await supabase
         .from("suppression")
         .select("id")
-        .ilike("email", email.fromEmail)
+        .ilike("email", suppressionEmail)
         .maybeSingle();
       if (!alreadySuppressed) {
         const reason = category === "bounce" ? "bounce" : category === "opt_out" ? "opt_out" : "departed";
         const { error: suppressError } = await supabase.from("suppression").insert({
-          email: email.fromEmail,
+          email: suppressionEmail,
           reason,
-          source_campaign_id: match.campaignId,
+          source_campaign_id: match.campaignId ?? activeCampaignIds[0] ?? null,
         });
         if (!suppressError) result.suppressed++;
       }
@@ -372,27 +427,20 @@ export async function processOneMessage(
     // alone — so the contact still gets removed (suppression already
     // covers recontact regardless), it's just never queued to look
     // for someone else there.
-    if ((isHardBounce || category === "ooo_departed") && match.contactId) {
-      const { data: contact } = await supabase
-        .from("contacts")
-        .select("email, venue, venue_type, city, state, country, list_id")
-        .eq("id", match.contactId)
-        .single();
-      if (contact) {
-        await supabase.from("replacement_queue").insert({
-          venue: contact.venue,
-          venue_type: contact.venue_type,
-          city: contact.city,
-          state: contact.state,
-          country: contact.country,
-          list_id: contact.list_id,
-          removed_contact_email: contact.email,
-          removed_reason: category,
-          campaign_ids: activeCampaignIds,
-        });
-        await supabase.from("contacts").delete().eq("id", match.contactId);
-        result.removedForReplacement++;
-      }
+    if ((isHardBounce || category === "ooo_departed") && effectiveContactId && effectiveContact) {
+      await supabase.from("replacement_queue").insert({
+        venue: effectiveContact.venue,
+        venue_type: effectiveContact.venue_type,
+        city: effectiveContact.city,
+        state: effectiveContact.state,
+        country: effectiveContact.country,
+        list_id: effectiveContact.list_id,
+        removed_contact_email: effectiveContact.email,
+        removed_reason: category,
+        campaign_ids: activeCampaignIds,
+      });
+      await supabase.from("contacts").delete().eq("id", effectiveContactId);
+      result.removedForReplacement++;
     } else if (category === "opt_out" && match.contactId) {
       await supabase.from("contacts").delete().eq("id", match.contactId);
     }

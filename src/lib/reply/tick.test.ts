@@ -9,7 +9,10 @@ import { runReplyPollTick } from "./tick";
 vi.mock("@/lib/gmail/client", () => ({ getAccessToken: vi.fn(async () => "fake-token") }));
 vi.mock("@/lib/oauth/google", () => ({ OAuthTokenRevokedError: class OAuthTokenRevokedError extends Error {} }));
 const classifyBounce = vi.fn((_email: unknown) => ({ isBounce: false, isHard: false }));
-vi.mock("./bounceDetection", () => ({ classifyBounce: (email: unknown) => classifyBounce(email) }));
+vi.mock("./bounceDetection", async () => {
+  const actual = await vi.importActual<typeof import("./bounceDetection")>("./bounceDetection");
+  return { ...actual, classifyBounce: (email: unknown) => classifyBounce(email) };
+});
 vi.mock("./classify", () => ({
   classifyReply: vi.fn(async () => ({ category: "interested", oooReturnDate: null })),
 }));
@@ -390,5 +393,116 @@ describe("runReplyPollTick", () => {
 
       expect(advanced).toBe(expectAdvance);
     });
+  });
+});
+
+// Confirmed live, 2026-09-16: 49 real hard bounces in one day never
+// matched a campaign send by thread (broken/stripped DSN headers), so
+// their contacts sat unsuppressed and still active. A DSN's own From:
+// header is the mail server, never the real recipient -- this proves the
+// recovery path pulls the actual failed address out of the bounce body
+// and, once it's confirmed to belong to a real, currently-active contact,
+// runs the exact same suppress/queue/delete cleanup a normal matched hard
+// bounce gets.
+describe("runReplyPollTick bounce-body recovery for an unmatched hard bounce", () => {
+  it("suppresses the real recipient (not the DSN sender), queues for replacement, and removes the contact", async () => {
+    listNewMessageIds.mockReset().mockResolvedValueOnce({ messageIds: ["msg-1"], newHistoryId: "100", wasReset: false, truncated: false, nextPageToken: null });
+    classifyBounce.mockReset().mockReturnValueOnce({ isBounce: true, isHard: true });
+    fetchGmailMessage.mockReset().mockResolvedValueOnce(
+      fakeEmail({
+        fromEmail: "mailer-daemon@googlemail.com",
+        subject: "Delivery Status Notification (Failure)",
+        bodyText: "The following addresses had permanent fatal errors:\n<dead@venue.example>\n550 5.1.1 User unknown",
+        labelIds: ["INBOX"],
+      }),
+    );
+
+    const inserts: { table: string; row: Record<string, unknown> }[] = [];
+    const supabaseAccounts = {
+      from: (table: string) => {
+        if (table === "connected_accounts") {
+          // Two distinct real call shapes on this table: the outer poll
+          // loop's select().eq("status","active"), and the recovery step's
+          // bare select("email_address") with no filter at all -- the
+          // latter needs the intermediate object itself to be thenable.
+          return {
+            select: () => ({
+              eq: () => ({ data: [{ id: "acc-1", email_address: "stone@jaymestone.com", last_history_id: "50", history_page_token: null }], error: null }),
+              then: (resolve: (v: { data: unknown; error: null }) => void) => resolve({ data: [{ email_address: "stone@jaymestone.com" }], error: null }),
+            }),
+            update: () => ({ eq: async () => ({ data: null, error: null }) }),
+          };
+        }
+        if (table === "contacts") {
+          return {
+            select: (fields: string) => {
+              if (fields === "id") {
+                return { ilike: (_col: string, val: string) => ({ maybeSingle: async () => (val === "dead@venue.example" ? { data: { id: "contact-1" }, error: null } : { data: null, error: null }) }) };
+              }
+              return { eq: () => ({ maybeSingle: async () => ({ data: { email: "dead@venue.example", venue: "The Venue", venue_type: "Theater", city: "Austin", state: "TX", country: "USA", list_id: "list-1" }, error: null }) }) };
+            },
+            delete: () => ({
+              eq: async (_col: string, val: string) => {
+                inserts.push({ table: "contacts.delete", row: { id: val } });
+                return { data: null, error: null };
+              },
+            }),
+          };
+        }
+        if (table === "campaign_members") {
+          // Two distinct real call shapes: the recovery step's
+          // select("id").eq().eq().limit(1).maybeSingle() (is this contact
+          // actively enrolled anywhere?), and activeCampaignIds' own
+          // select("campaign_id").eq().eq() with no limit/maybeSingle --
+          // the latter needs the second .eq() result itself to be thenable.
+          return {
+            select: () => ({
+              eq: () => ({
+                eq: () => ({
+                  limit: () => ({ maybeSingle: async () => ({ data: { id: "cm-1" }, error: null }) }),
+                  then: (resolve: (v: { data: unknown; error: null }) => void) => resolve({ data: [{ campaign_id: "camp-1" }], error: null }),
+                }),
+              }),
+            }),
+          };
+        }
+        if (table === "suppression") {
+          return {
+            select: () => ({ ilike: () => ({ maybeSingle: async () => ({ data: null, error: null }) }) }),
+            insert: async (row: Record<string, unknown>) => {
+              inserts.push({ table: "suppression", row });
+              return { data: null, error: null };
+            },
+          };
+        }
+        if (table === "replacement_queue") {
+          return {
+            insert: async (row: Record<string, unknown>) => {
+              inserts.push({ table: "replacement_queue", row });
+              return { data: null, error: null };
+            },
+          };
+        }
+        if (table === "inbound_messages") {
+          return {
+            select: () => ({ eq: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: null }) }) }) }),
+            insert: () => ({ select: () => ({ single: async () => ({ data: { id: "row-1" }, error: null }) }) }),
+            update: () => ({ eq: async () => ({ data: null, error: null }) }),
+          };
+        }
+        return fakeSupabase().from(table);
+      },
+    } as unknown as SupabaseClient;
+
+    const result = await runReplyPollTick(supabaseAccounts);
+
+    expect(result.suppressed).toBe(1);
+    expect(result.removedForReplacement).toBe(1);
+    const suppressionInsert = inserts.find((i) => i.table === "suppression");
+    expect(suppressionInsert?.row.email).toBe("dead@venue.example"); // the real recipient, not mailer-daemon@googlemail.com
+    const queueInsert = inserts.find((i) => i.table === "replacement_queue");
+    expect(queueInsert?.row.removed_contact_email).toBe("dead@venue.example");
+    expect(inserts.find((i) => i.table === "contacts.delete")?.row.id).toBe("contact-1");
+    expect(inserts.find((i) => i.table === "replacement_queue")?.row.campaign_ids).toEqual(["camp-1"]);
   });
 });

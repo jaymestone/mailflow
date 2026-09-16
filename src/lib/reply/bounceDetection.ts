@@ -90,3 +90,28 @@ export function classifyBounce(opts: {
 export function isBounceMessage(opts: { fromEmail: string; subject: string; bodyText: string }): boolean {
   return classifyBounce(opts).isBounce;
 }
+
+const EMAIL_PATTERN = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+
+/** A DSN's own From: header is always the *sending* mail server
+ * (mailer-daemon@, postmaster@, etc.) — never the real recipient whose
+ * address actually failed. When In-Reply-To/References threading can't
+ * match a bounce back to the original send (broken or stripped by the
+ * recipient's mail system — common with several corporate/Exchange
+ * senders, confirmed live 2026-09-16: 49 real hard bounces sat unmatched
+ * this way in one day, silently leaving their contacts unsuppressed and
+ * un-paused), the DSN body itself almost always still names the failed
+ * address directly ("the following addresses had permanent fatal
+ * errors", "wasn't delivered to X because...", etc.). Returns every
+ * candidate found, in order, for the caller to check against real
+ * contacts -- deliberately not narrowed further here, since which
+ * candidate is real depends on data this module doesn't have (the
+ * contacts table). `excludeEmails` filters out addresses that can't be
+ * the failed recipient on their face: the DSN's own sender, and every one
+ * of this system's own sending accounts (which can legitimately appear
+ * quoted in the bounce's copy of the original failed message). */
+export function extractBouncedRecipientCandidates(bodyText: string, excludeEmails: string[]): string[] {
+  const exclude = new Set(excludeEmails.map((e) => e.toLowerCase()));
+  const found = bodyText.match(EMAIL_PATTERN) ?? [];
+  return [...new Set(found.map((e) => e.toLowerCase()))].filter((e) => !exclude.has(e));
+}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyBounce, isBounceMessage } from "./bounceDetection";
+import { classifyBounce, extractBouncedRecipientCandidates, isBounceMessage } from "./bounceDetection";
 
 describe("classifyBounce", () => {
   it("classifies a 5.x.x SMTP code as a hard bounce", () => {
@@ -85,5 +85,32 @@ describe("isBounceMessage", () => {
         bodyText: "Sounds great, let's talk.",
       }),
     ).toBe(false);
+  });
+});
+
+describe("extractBouncedRecipientCandidates", () => {
+  it("pulls the real failed recipient out of a DSN body, excluding our own sending address", () => {
+    const body =
+      "The original message was received at Wed, 16 Sep 2026 10:31:01 -0600\r\n" +
+      "   ----- The following addresses had permanent fatal errors -----\r\n" +
+      "<matthew.marroquin@du.edu>\r\n" +
+      "    (reason: 554 5.4.14 Hop count exceeded)\r\n";
+
+    const candidates = extractBouncedRecipientCandidates(body, ["stone@jaymestone.com"]);
+
+    expect(candidates).toEqual(["matthew.marroquin@du.edu"]);
+  });
+
+  it("excludes every given address, case-insensitively, without excluding anything else", () => {
+    const body = "wasn't delivered to Robe0820@umn.edu because the address couldn't be found.\r\n" + "From: STONE@jaymestone.com";
+
+    const candidates = extractBouncedRecipientCandidates(body, ["stone@jaymestone.com"]);
+
+    expect(candidates).toEqual(["robe0820@umn.edu"]);
+  });
+
+  it("returns an empty array when nothing but excluded addresses are present", () => {
+    const candidates = extractBouncedRecipientCandidates("From: stone@jaymestone.com", ["stone@jaymestone.com"]);
+    expect(candidates).toEqual([]);
   });
 });

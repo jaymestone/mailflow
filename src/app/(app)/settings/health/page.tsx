@@ -1,11 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { DeliverabilityCheck } from "./health-client";
-
-const EXPECTED_INTERVAL_MINUTES: Record<string, number> = {
-  "geocode-tick": 1,
-  "send-engine-tick": 15,
-  "reply-poll-tick": 5,
-};
+import { ReprocessControls } from "./reprocess-controls";
+import { EXPECTED_INTERVAL_MINUTES } from "@/lib/health/constants";
 
 function minutesSince(dateStr: string): number {
   return (Date.now() - new Date(dateStr).getTime()) / 60000;
@@ -97,13 +93,12 @@ export default async function HealthPage() {
         // Whenever a reply-poll-tick's saved history checkpoint turns out to
         // be unusable, this used to be completely silent -- a real gap of
         // unprocessed mail went unnoticed for ~2 hours on 2026-09-15 before
-        // this existed. A search-based auto-recovery was attempted the same
-        // day but caused repeated live timeouts and is TEMPORARILY DISABLED
-        // (see reply/tick.ts) pending investigation -- a reset still
-        // re-baselines and gets logged here, but the account's own gap
-        // (whatever arrived between the old checkpoint and now) is not
-        // currently being recovered automatically. Treat any entry here as
-        // a signal that account may need a manual look.
+        // this existed. Search-based auto-recovery (re-enabled 2026-09-16,
+        // see reply/tick.ts) now runs automatically on a reset -- `recovered`
+        // is how many messages it actually found and processed from the
+        // gap. Still worth a glance: the recovery search only looks back a
+        // few days, so a reset after a much longer gap may need a manual
+        // check via "Reprocess stuck messages" below with a wider window.
         const replyRow = (cronHealth ?? []).find((h) => h.job_name === "reply-poll-tick");
         const resets = (replyRow?.last_result?.historyResets ?? []) as { account: string; recovered: number }[];
         if (resets.length === 0) return null;
@@ -111,14 +106,13 @@ export default async function HealthPage() {
           <section className="mt-9">
             <h2 className="font-display text-[21px] font-medium text-ink">History checkpoint resets</h2>
             <p className="mt-1.5 text-pretty text-sm text-muted">
-              The most recent reply check found a saved checkpoint Gmail no longer recognized. Auto-recovery of
-              the resulting gap is temporarily disabled (it caused its own timeouts) — these accounts may have
-              unprocessed mail from before the reset that&apos;s worth a manual check.
+              The most recent reply check found a saved checkpoint Gmail no longer recognized, and automatically
+              searched for anything from the gap.
             </p>
             <ul className="mt-3 space-y-1 text-sm">
               {resets.map((r, i) => (
                 <li key={i} className="text-ink-soft">
-                  <span className="text-ink">{r.account}</span>
+                  <span className="text-ink">{r.account}</span> — {r.recovered} recovered
                 </li>
               ))}
             </ul>
@@ -259,6 +253,11 @@ export default async function HealthPage() {
             </tbody>
           </table>
         </div>
+      </section>
+
+      <section className="mt-9">
+        <h2 className="font-display text-[21px] font-medium text-ink">Reprocess stuck messages</h2>
+        <ReprocessControls />
       </section>
     </div>
   );

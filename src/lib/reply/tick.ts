@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getAccessToken } from "@/lib/gmail/client";
-import { getCurrentHistoryId, listNewMessageIds } from "@/lib/gmail/history";
+import { getCurrentHistoryId, listNewMessageIds, searchMessageIds } from "@/lib/gmail/history";
 import { fetchGmailMessage } from "@/lib/gmail/messages";
 import { applyGmailLabel, CATEGORY_LABEL_NAMES, getOrCreateLabelId } from "@/lib/gmail/labels";
 import { OAuthTokenRevokedError } from "@/lib/oauth/google";
@@ -10,6 +10,15 @@ import { classifyReply } from "./classify";
 import type { ReplyCategory } from "./types";
 
 const DEFAULT_OOO_SNOOZE_DAYS = 7;
+
+// How far back a history-reset recovery search looks. Gmail only retains
+// ~1 week of history for the incremental API anyway, and this tick runs
+// every ~5 minutes in normal operation, so a real reset-caused gap should
+// almost always be far smaller than this -- generous enough to cover an
+// account that was down for a couple of days, without searching so far
+// back that an old reset (already covered by a previous recovery pass)
+// gets needlessly re-scanned every time.
+const HISTORY_RESET_RECOVERY_WINDOW_DAYS = 3;
 
 // cron-job.org's own client-side request timeout is a confirmed hard 30s
 // ceiling (checked directly — not configurable even on request), shorter
@@ -160,8 +169,13 @@ async function retryLabelOnly(
  * inbound_messages row at all, because cheap ran out mid-list while
  * expensive still had headroom, so the old both-exhausted check never
  * tripped and the checkpoint sailed past them as if the tick had fully
- * succeeded). */
-async function processOneMessage(
+ * succeeded).
+ *
+ * Exported deliberately (not just for this file's own loop below): also
+ * used directly by reply/reprocess.ts to recover a specific message that
+ * fell through a gap like the one above, without needing it to resurface
+ * through Gmail history first. */
+export async function processOneMessage(
   supabase: SupabaseClient,
   account: { id: string; email_address: string },
   messageId: string,
@@ -530,15 +544,27 @@ export async function runReplyPollTick(supabase: SupabaseClient): Promise<ReplyT
         if (outcome === "budget-exhausted") hitBatchCap = true;
       }
 
-      // Search-based recovery on a reset checkpoint is still disabled (see
-      // MAX_HISTORY_PAGES in gmail/history.ts for how the actual timeout
-      // root cause -- unbounded pagination through Gmail's history stream,
-      // unrelated to recovery -- was eventually found and fixed). Recovery
-      // itself could reasonably be re-enabled now that the real bottleneck
-      // is understood, but hasn't been re-verified live yet -- leaving it
-      // off is the more conservative choice until it is.
+      // Search-based recovery on a reset checkpoint. Was disabled the same
+      // day it first shipped (2026-09-15) after causing repeated live
+      // timeouts -- that turned out to be an unrelated, unbounded
+      // pagination bug in listNewMessageIds itself (see MAX_HISTORY_PAGES
+      // in gmail/history.ts), not this recovery path. Re-enabled
+      // 2026-09-16 now that the real bottleneck is fixed: searchMessageIds
+      // is already capped to one page of 50 specifically so this can never
+      // repeat that timeout, and every result still goes through
+      // processOneMessage's own existing-row check and budget gating, so
+      // it can't double-process anything or blow the tick's time budget --
+      // it just quietly finds nothing to do once the budget most of this
+      // tick already spent runs out, same as any other message this late
+      // in the loop.
       if (wasReset) {
-        result.historyResets.push({ account: account.email_address, recovered: 0 });
+        const recoveryIds = await searchMessageIds(accessToken, `newer_than:${HISTORY_RESET_RECOVERY_WINDOW_DAYS}d`);
+        let recovered = 0;
+        for (const messageId of recoveryIds) {
+          const outcome = await processOneMessage(supabase, account, messageId, accessToken, labelCache, result, budget);
+          if (outcome === "processed") recovered++;
+        }
+        result.historyResets.push({ account: account.email_address, recovered });
       }
 
       if (truncated) {

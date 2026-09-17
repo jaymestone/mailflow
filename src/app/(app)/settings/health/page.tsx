@@ -177,6 +177,11 @@ export default async function HealthPage() {
       </section>
 
       <section className="mt-9">
+        <h2 className="font-display text-[21px] font-medium text-ink">Reprocess stuck messages</h2>
+        <ReprocessControls />
+      </section>
+
+      <section className="mt-9">
         <h2 className="font-display text-[21px] font-medium text-ink">Recent send failures</h2>
         <div className="mt-3 overflow-x-auto">
           <table className="w-full text-left text-sm">
@@ -253,11 +258,6 @@ export default async function HealthPage() {
             </tbody>
           </table>
         </div>
-      </section>
-
-      <section className="mt-9">
-        <h2 className="font-display text-[21px] font-medium text-ink">Reprocess stuck messages</h2>
-        <ReprocessControls />
       </section>
     </div>
   );

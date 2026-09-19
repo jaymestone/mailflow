@@ -21,6 +21,7 @@ function stub(result: { data?: unknown; count?: number } = {}) {
     is: () => builder,
     lt: () => builder,
     gte: () => builder,
+    limit: () => builder,
     upsert: async () => ({ data: null, error: null }),
     maybeSingle: async () => ({ data: result.data ?? null, error: null }),
     then: (resolve: (v: { data: unknown; error: null; count?: number }) => void) =>
@@ -52,7 +53,11 @@ type Overrides = Partial<{
   cronHealth: unknown[];
   errorAccounts: unknown[];
   unlabeledCount: number;
-  unmatchedCount: number;
+  /** Senders of unmatched replies/bounces in the window. */
+  unmatchedSenders: { from_email: string }[];
+  /** Emails from `unmatchedSenders` that resolve to a contact who is still
+   * active in a campaign -- the only case that now alerts. */
+  activeContactEmails: string[];
   failureCount: number;
   cooldownRows: unknown[];
   accountId: string | null;
@@ -60,13 +65,34 @@ type Overrides = Partial<{
 }>;
 
 /** checkAndSendAlerts' own call order per table (see alerts.ts):
- * inbound_messages -> [unlabeled-backlog count, unmatched-spike count];
+ * inbound_messages -> [unlabeled-backlog count, then the unmatched-sender
+ * list]; contacts/campaign_members -> one lookup pair per distinct sender;
  * connected_accounts -> [error-account list, then (only if something is
  * due) the sending account by id]; app_settings -> [cooldown-rows lookup,
  * then (only if something is due) reply_to_account_id, then one upsert per
  * due signal]. */
 function baseSupabase(overrides: Overrides = {}) {
-  const inboundSequence = sequenced(stub({ count: overrides.unlabeledCount ?? 0 }), stub({ count: overrides.unmatchedCount ?? 0 }));
+  const activeSet = new Set((overrides.activeContactEmails ?? []).map((e) => e.toLowerCase()));
+  const inboundSequence = sequenced(
+    stub({ count: overrides.unlabeledCount ?? 0 }),
+    stub({ data: overrides.unmatchedSenders ?? [] }),
+  );
+  // contacts is queried as .select("id").ilike("email", <sender>).maybeSingle();
+  // a sender only counts as a real contact when it's in activeContactEmails.
+  const contactsStub = {
+    select: () => ({
+      ilike: (_col: string, val: string) => ({
+        maybeSingle: async () => ({ data: activeSet.has(val.toLowerCase()) ? { id: `contact-${val}` } : null, error: null }),
+      }),
+    }),
+  };
+  const campaignMembersStub = {
+    select: () => ({
+      eq: () => ({
+        eq: () => ({ limit: () => ({ maybeSingle: async () => ({ data: { id: "cm-1" }, error: null }) }) }),
+      }),
+    }),
+  };
   const connectedAccountsSequence = sequenced(
     stub({ data: overrides.errorAccounts ?? [] }),
     stub({ data: { id: DEFAULT_ACCOUNT_ID, email_address: "stone@jaymestone.com", display_name: "Jayme Stone" } }),
@@ -92,6 +118,10 @@ function baseSupabase(overrides: Overrides = {}) {
           return connectedAccountsSequence();
         case "inbound_messages":
           return inboundSequence();
+        case "contacts":
+          return contactsStub;
+        case "campaign_members":
+          return campaignMembersStub;
         case "outbound_sends":
           return stub({ count: overrides.failureCount ?? 0 });
         case "app_settings":
@@ -176,5 +206,47 @@ describe("checkAndSendAlerts", () => {
     expect(opts.body).toContain("12 message(s)");
     expect(opts.body).toContain("agency@jaymestone.com");
     expect(opts.subject).toContain("2 issues");
+  });
+
+  // The original version of this signal counted raw unmatched messages and
+  // fired constantly on nothing actionable (confirmed live, 2026-09-19: 91
+  // unmatched in 24h, zero of them a contact still being sequenced --
+  // several alert emails a day, all noise). These two pin down the
+  // narrowed behavior: silent on ordinary unmatched volume, loud only when
+  // someone will actually keep getting emailed past their own reply.
+  it("stays silent on unmatched messages whose senders aren't active contacts, however many there are", async () => {
+    const { sendGmailMessage } = await import("@/lib/gmail/client");
+    vi.mocked(sendGmailMessage).mockClear();
+
+    const manySenders = Array.from({ length: 91 }, (_, i) => ({ from_email: `stranger${i}@example.com` }));
+    const supabase = baseSupabase({ unmatchedSenders: manySenders, activeContactEmails: [] });
+
+    const result = await checkAndSendAlerts(supabase);
+
+    expect(result.unhealthySignals).toEqual([]);
+    expect(result.sentEmail).toBe(false);
+    expect(sendGmailMessage).not.toHaveBeenCalled();
+  });
+
+  it("alerts on even a single unmatched sender who is still active in a campaign, naming them", async () => {
+    const { sendGmailMessage } = await import("@/lib/gmail/client");
+    vi.mocked(sendGmailMessage).mockClear();
+
+    const supabase = baseSupabase({
+      unmatchedSenders: [
+        { from_email: "stranger@example.com" },
+        { from_email: "booker@realvenue.org" },
+      ],
+      activeContactEmails: ["booker@realvenue.org"],
+    });
+
+    const result = await checkAndSendAlerts(supabase);
+
+    expect(result.unhealthySignals).toEqual(["unmatched-active-contact"]);
+    expect(result.sentEmail).toBe(true);
+    const [, opts] = vi.mocked(sendGmailMessage).mock.calls[0];
+    expect(opts.body).toContain("booker@realvenue.org");
+    expect(opts.body).toContain("STILL ACTIVE");
+    expect(opts.body).not.toContain("stranger@example.com");
   });
 });

@@ -22,7 +22,12 @@ const ALERT_COOLDOWN_HOURS = 4;
 // routine; two hours is not.
 const UNLABELED_BACKLOG_AGE_HOURS = 2;
 
-const UNMATCHED_SPIKE_THRESHOLD = 5;
+// Deliberately 1, not a "spike" count: a single contact still being
+// sequenced after they already replied is itself worth knowing about, and
+// because this now only counts that specific case (see the check below),
+// it should normally be zero rather than something that needs a threshold
+// to stay quiet.
+const UNMATCHED_ACTIVE_CONTACT_THRESHOLD = 1;
 const UNMATCHED_SPIKE_WINDOW_HOURS = 24;
 const SEND_FAILURE_SPIKE_THRESHOLD = 3;
 const SEND_FAILURE_SPIKE_WINDOW_HOURS = 24;
@@ -94,17 +99,50 @@ async function gatherSignals(supabase: SupabaseClient): Promise<Signal[]> {
     });
   }
 
+  // Deliberately NOT "how many messages were unmatched" -- that was the
+  // original check, and at real volume it fired constantly on nothing
+  // actionable (confirmed live, 2026-09-19: 91 unmatched in 24h, of which
+  // zero belonged to a contact still active in a campaign; Jayme was
+  // getting several alert emails a day, all of them noise). Plenty of
+  // inbound mail legitimately can't be tied to one send -- someone
+  // replying from a personal alias, a colleague answering on their
+  // behalf, a secondary DSN -- and none of that needs a human.
+  //
+  // The case that actually matters is narrower: an unmatched message
+  // whose sender IS a real contact who is STILL ACTIVE in a campaign.
+  // That's the one shape where the sequence keeps running at someone who
+  // already responded, which is exactly what nobody would otherwise
+  // notice. Checked by resolving senders to contacts rather than counting
+  // raw messages, so this stays silent on ordinary volume and gets loud
+  // only when someone is genuinely about to be emailed past a reply.
   const unmatchedCutoff = new Date(now - UNMATCHED_SPIKE_WINDOW_HOURS * 60 * 60 * 1000).toISOString();
-  const { count: unmatchedCount } = await supabase
+  const { data: unmatchedRows } = await supabase
     .from("inbound_messages")
-    .select("id", { count: "exact", head: true })
+    .select("from_email")
     .eq("match_method", "unmatched")
     .in("message_type", ["reply", "bounce"])
-    .gte("received_at", unmatchedCutoff);
-  if ((unmatchedCount ?? 0) >= UNMATCHED_SPIKE_THRESHOLD) {
+    .gte("received_at", unmatchedCutoff)
+    .limit(1000);
+  const senderEmails = [...new Set((unmatchedRows ?? []).map((r: { from_email: string }) => r.from_email.toLowerCase()))];
+  const stillActive: string[] = [];
+  for (const email of senderEmails) {
+    const { data: contact } = await supabase.from("contacts").select("id").ilike("email", email).maybeSingle();
+    if (!contact) continue;
+    const { data: activeMember } = await supabase
+      .from("campaign_members")
+      .select("id")
+      .eq("contact_id", contact.id)
+      .eq("member_status", "active")
+      .limit(1)
+      .maybeSingle();
+    if (activeMember) stillActive.push(email);
+  }
+  if (stillActive.length >= UNMATCHED_ACTIVE_CONTACT_THRESHOLD) {
+    const shown = stillActive.slice(0, 5).join(", ");
+    const more = stillActive.length > 5 ? `, and ${stillActive.length - 5} more` : "";
     signals.push({
-      key: "unmatched-spike",
-      message: `${unmatchedCount} replies/bounces in the last ${UNMATCHED_SPIKE_WINDOW_HOURS}h never linked back to a campaign send -- none of these are holding back a scheduled follow-up automatically.`,
+      key: "unmatched-active-contact",
+      message: `${stillActive.length} contact(s) replied or bounced in the last ${UNMATCHED_SPIKE_WINDOW_HOURS}h but are STILL ACTIVE in a campaign -- their sequence will keep sending unless someone intervenes: ${shown}${more}.`,
     });
   }
 

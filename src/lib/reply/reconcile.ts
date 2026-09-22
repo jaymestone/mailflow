@@ -83,29 +83,73 @@ export async function runReconcileTick(
   // needs, and the most recent reply is the most current intent.
   const seen = new Set<string>();
 
+  // Distinct senders, newest message first -- the resolution below runs
+  // concurrently, so the ordering has to be fixed here rather than
+  // emerging from the loop.
+  const candidates: { sender: string; msg: (typeof rows)[number] }[] = [];
   for (const msg of rows) {
     const sender = msg.from_email?.toLowerCase();
     if (!sender || seen.has(sender)) continue;
+    seen.add(sender);
+    candidates.push({ sender, msg });
+  }
 
+  // Resolving each sender takes two queries, and most senders resolve to
+  // nothing (they're strangers, mailer-daemons, or people who aren't
+  // contacts) -- so the great majority of this work is lookups that find
+  // no one. Done one at a time that's ~400 sequential round trips:
+  // measured at 75s against real data, well past the ~30s ceiling
+  // cron-job.org enforces, meaning the job would have been killed
+  // mid-run every time. Resolving in parallel batches keeps the query
+  // shapes identical while collapsing the wall time to a few seconds.
+  const CONCURRENCY = 20;
+  type Resolved = {
+    msg: (typeof rows)[number];
+    contact: { id: string; email: string; venue: string | null };
+    activeMembers: { id: string; campaign_id: string }[];
+  };
+  const resolved: Resolved[] = [];
+
+  for (let i = 0; i < candidates.length; i += CONCURRENCY) {
+    const batch = candidates.slice(i, i + CONCURRENCY);
+    const settled = await Promise.all(
+      batch.map(async ({ sender, msg }): Promise<Resolved | null> => {
+        try {
+          // Case-insensitive, with ilike's wildcards escaped and the
+          // result re-verified in JS -- same approach and reasoning as
+          // matching.ts.
+          const { data: found } = await supabase
+            .from("contacts")
+            .select("id, email, venue")
+            .ilike("email", sender.replace(/([%_\\])/g, "\\$1"))
+            .limit(5);
+          const contact = (found ?? []).find((c) => c.email.toLowerCase() === sender);
+          if (!contact) return null;
+
+          const { data: activeMembers } = await supabase
+            .from("campaign_members")
+            .select("id, campaign_id")
+            .eq("contact_id", contact.id)
+            .eq("member_status", "active");
+          if (!activeMembers || activeMembers.length === 0) return null;
+
+          return { msg, contact, activeMembers };
+        } catch (err) {
+          result.errors.push({ email: sender, error: err instanceof Error ? err.message : String(err) });
+          return null;
+        }
+      }),
+    );
+    for (const r of settled) if (r) resolved.push(r);
+  }
+
+  // Writes stay sequential: there are only ever a handful, and keeping
+  // them ordered makes a partial run (killed mid-way) easy to reason
+  // about -- whatever was repaired is simply repaired, and the rest is
+  // picked up next time.
+  for (const { msg, contact, activeMembers } of resolved) {
+    const sender = contact.email.toLowerCase();
     try {
-      // Case-insensitive, with ilike's wildcards escaped and the result
-      // re-verified in JS -- same approach and reasoning as matching.ts.
-      const { data: candidates } = await supabase
-        .from("contacts")
-        .select("id, email, venue")
-        .ilike("email", sender.replace(/([%_\\])/g, "\\$1"))
-        .limit(5);
-      const contact = (candidates ?? []).find((c) => c.email.toLowerCase() === sender);
-      if (!contact) continue;
-
-      const { data: activeMembers } = await supabase
-        .from("campaign_members")
-        .select("id, campaign_id")
-        .eq("contact_id", contact.id)
-        .eq("member_status", "active");
-      if (!activeMembers || activeMembers.length === 0) continue;
-
-      seen.add(sender);
       const category = msg.classification_category as ReplyCategory | null;
 
       if (dryRun) {

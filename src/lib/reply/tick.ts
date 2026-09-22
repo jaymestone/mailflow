@@ -389,11 +389,11 @@ export async function processOneMessage(
     // Fetched once, early, so both the suppression email below and the
     // replacement-queue insert further down share the same real contact
     // record instead of querying it twice.
-    let effectiveContact: { email: string; venue: string | null; venue_type: string | null; city: string | null; state: string | null; country: string | null; list_id: string | null } | null = null;
+    let effectiveContact: { email: string; first_name: string | null; last_name: string | null; website: string | null; venue: string | null; venue_type: string | null; city: string | null; state: string | null; country: string | null; list_id: string | null } | null = null;
     if (effectiveContactId && (isHardBounce || category === "ooo_departed")) {
       const { data } = await supabase
         .from("contacts")
-        .select("email, venue, venue_type, city, state, country, list_id")
+        .select("email, first_name, last_name, website, venue, venue_type, city, state, country, list_id")
         .eq("id", effectiveContactId)
         .maybeSingle();
       effectiveContact = data ?? null;
@@ -486,6 +486,12 @@ export async function processOneMessage(
         removed_contact_email: effectiveContact.email,
         removed_reason: category,
         campaign_ids: activeCampaignIds,
+        // Carried so the research doesn't have to rediscover what we
+        // already knew -- see migration 00000000000030 for why the
+        // departed person's NAME in particular makes their email pattern
+        // readable rather than ambiguous.
+        venue_website: effectiveContact.website,
+        removed_contact_name: [effectiveContact.first_name, effectiveContact.last_name].filter(Boolean).join(" ") || null,
       });
       await supabase.from("contacts").delete().eq("id", effectiveContactId);
       result.removedForReplacement++;

@@ -82,7 +82,7 @@ export async function runReplacementResearchTick(supabase: SupabaseClient): Prom
   const { data: pending } = await supabase
     .from("replacement_queue")
     .select(
-      "id, venue, venue_type, city, state, country, list_id, removed_contact_email, removed_reason, campaign_ids, research_attempts",
+      "id, venue, venue_type, city, state, country, list_id, removed_contact_email, removed_reason, campaign_ids, research_attempts, venue_website, removed_contact_name",
     )
     .eq("status", "pending")
     .order("removed_at", { ascending: true })

@@ -2,6 +2,7 @@ import { createClient } from "@/lib/supabase/server";
 import { DeliverabilityCheck } from "./health-client";
 import { ReprocessControls } from "./reprocess-controls";
 import { EXPECTED_INTERVAL_MINUTES } from "@/lib/health/constants";
+import { DAILY_COUNT_KEY, DAILY_RESEARCH_CAP } from "@/lib/research/replacementTick";
 
 function minutesSince(dateStr: string): number {
   return (Date.now() - new Date(dateStr).getTime()) / 60000;
@@ -19,6 +20,9 @@ export default async function HealthPage() {
     { data: abandonedResearch },
     { count: abandonedResearchTotal },
     { count: pendingResearch },
+    { data: researchStatuses },
+    { data: researchUsage },
+    { count: researchedContactsAlive },
   ] = await Promise.all([
       supabase.from("cron_health").select("job_name, last_run_at, last_result"),
       supabase.from("connected_accounts").select("id, email_address, status, last_error"),
@@ -66,6 +70,17 @@ export default async function HealthPage() {
         .from("replacement_queue")
         .select("id", { count: "exact", head: true })
         .eq("status", "pending"),
+      // Outcome mix for the research, so its hit rate is visible rather
+      // than inferred. Grouped in JS rather than with four head-counts --
+      // the queue is small and this is one round trip instead of four.
+      supabase.from("replacement_queue").select("status").limit(2000),
+      supabase.from("app_settings").select("value").eq("key", DAILY_COUNT_KEY).maybeSingle(),
+      // Every contact the research produced is stamped with this source,
+      // which is what makes its output traceable after the fact.
+      supabase
+        .from("contacts")
+        .select("id", { count: "exact", head: true })
+        .like("source", "Auto-replacement%"),
     ]);
 
   // Mirrors the 5-minute self-expiry try_acquire_send_lock() itself applies
@@ -75,6 +90,36 @@ export default async function HealthPage() {
   const lockActuallyHeld = lockMinutesHeld !== null && lockMinutesHeld < 5;
 
   const domains = [...new Set((accounts ?? []).map((a) => a.email_address.split("@")[1]))];
+
+  // --- Replacement research: is it worth what it costs? ---------------
+  // The benchmark is Jayme's VA at $0.15 a contact with roughly 75% of
+  // them usable, i.e. about $0.20 per contact he can actually rely on.
+  // Answering that needs two things this page can supply -- how often the
+  // research succeeds, and how often what it found turns out to be real.
+  const statusCounts = (researchStatuses ?? []).reduce<Record<string, number>>((acc, r) => {
+    acc[r.status] = (acc[r.status] ?? 0) + 1;
+    return acc;
+  }, {});
+  const replacedCount = statusCounts.replaced ?? 0;
+  const noReplacementCount = statusCounts.no_replacement_found ?? 0;
+  const completedSearches = replacedCount + noReplacementCount;
+  const hitRate = completedSearches > 0 ? Math.round((replacedCount / completedSearches) * 100) : null;
+
+  // Every contact the research produced carries the "Auto-replacement"
+  // source stamp. A hard bounce deletes the contact outright (see
+  // reply/tick.ts), so a found address that turned out to be wrong
+  // disappears -- which makes the gap between produced and surviving a
+  // usable, if imperfect, reliability signal. Imperfect because an
+  // opt-out or a later departure removes a contact too, so this reads as
+  // a floor on reliability rather than an exact figure.
+  const researchedProduced = replacedCount;
+  const researchedAlive = researchedContactsAlive ?? 0;
+  const researchedGone = Math.max(researchedProduced - researchedAlive, 0);
+  const survivalRate = researchedProduced > 0 ? Math.round((researchedAlive / researchedProduced) * 100) : null;
+
+  const usage = researchUsage?.value as { date?: string; count?: number } | null | undefined;
+  const todayUtc = new Date().toISOString().slice(0, 10);
+  const usedToday = usage && usage.date === todayUtc ? (usage.count ?? 0) : 0;
 
   return (
     <div>
@@ -131,6 +176,66 @@ export default async function HealthPage() {
           )}
         </section>
       )}
+
+      <section className="mt-9">
+        <h2 className="font-display text-[21px] font-medium text-ink">Replacement research — is it earning its keep?</h2>
+        <p className="mt-1.5 text-pretty text-sm text-muted">
+          For comparison: a VA at $0.15 a contact with ~75% usable works out to about{" "}
+          <span className="text-ink">$0.20 per contact you can rely on</span>. The two numbers that decide whether
+          this beats that are how often the search succeeds, and how much of what it finds turns out to be real.
+        </p>
+
+        <div className="mt-4 grid gap-3 sm:grid-cols-3">
+          <div className="rounded-[3px] border border-hairline bg-surface p-[14px_16px]">
+            <div className="text-[10px] tracking-wide text-faint uppercase">Hit rate</div>
+            <div className="mt-1 font-display text-[26px] text-ink">
+              {hitRate === null ? "—" : `${hitRate}%`}
+            </div>
+            <div className="mt-0.5 text-xs text-muted-3">
+              {completedSearches === 0
+                ? "no completed searches yet"
+                : `${replacedCount} found / ${completedSearches} searched`}
+            </div>
+          </div>
+
+          <div className="rounded-[3px] border border-hairline bg-surface p-[14px_16px]">
+            <div className="text-[10px] tracking-wide text-faint uppercase">Still valid</div>
+            <div className="mt-1 font-display text-[26px] text-ink">
+              {survivalRate === null ? "—" : `${survivalRate}%`}
+            </div>
+            <div className="mt-0.5 text-xs text-muted-3">
+              {researchedProduced === 0
+                ? "none produced yet"
+                : `${researchedAlive} of ${researchedProduced} still active${researchedGone > 0 ? `, ${researchedGone} since removed` : ""}`}
+            </div>
+          </div>
+
+          <div className="rounded-[3px] border border-hairline bg-surface p-[14px_16px]">
+            <div className="text-[10px] tracking-wide text-faint uppercase">Today&apos;s searches</div>
+            <div className="mt-1 font-display text-[26px] text-ink">
+              {usedToday}
+              <span className="text-[15px] text-faint-2"> / {DAILY_RESEARCH_CAP}</span>
+            </div>
+            <div className="mt-0.5 text-xs text-muted-3">
+              {usedToday >= DAILY_RESEARCH_CAP ? "daily cap reached — resumes tomorrow" : "daily spending cap"}
+            </div>
+          </div>
+        </div>
+
+        <p className="mt-3 text-pretty text-xs text-faint-2">
+          &ldquo;Still valid&rdquo; is a floor, not an exact figure. A researched address that turns out to be wrong
+          hard-bounces, and a hard bounce deletes the contact — so the gap between found and still-active is mostly
+          bad addresses, but an opt-out or a later departure removes a contact too. Read it as
+          &ldquo;at least this reliable.&rdquo;
+          {(pendingResearch ?? 0) > 0 && (
+            <>
+              {" "}
+              {pendingResearch} venue{pendingResearch === 1 ? "" : "s"} still queued
+              {usedToday >= DAILY_RESEARCH_CAP ? "; today's cap is spent" : ""}.
+            </>
+          )}
+        </p>
+      </section>
 
       <section className="mt-8">
         <h2 className="font-display text-[21px] font-medium text-ink">Background jobs</h2>

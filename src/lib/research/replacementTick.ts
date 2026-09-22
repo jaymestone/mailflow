@@ -50,8 +50,8 @@ const MAX_RESEARCH_ATTEMPTS = 3;
 // be bypassed by accident. At this rate a large backlog still drains in
 // days, which is fast enough for work that only matters when a venue
 // loses its contact.
-const DAILY_RESEARCH_CAP = 50;
-const DAILY_COUNT_KEY = "research_daily_count";
+export const DAILY_RESEARCH_CAP = 50;
+export const DAILY_COUNT_KEY = "research_daily_count";
 
 type DailyCount = { date: string; count: number };
 

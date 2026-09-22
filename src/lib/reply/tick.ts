@@ -83,7 +83,7 @@ export type ReplyTickResult = {
  * past (e.g. the auto-reply's date already elapsed by the time we poll) —
  * any of those fall back to a fixed snooze so the sequence never stays
  * blocked waiting on a return date that'll never gate anything. */
-function resolveResumeAt(oooReturnDate: string | null): string {
+export function resolveResumeAt(oooReturnDate: string | null): string {
   const fallback = new Date(Date.now() + DEFAULT_OOO_SNOOZE_DAYS * 24 * 60 * 60 * 1000);
   if (!oooReturnDate) return fallback.toISOString();
   const parsed = new Date(`${oooReturnDate}T09:00:00`);

@@ -10,8 +10,16 @@ function minutesSince(dateStr: string): number {
 export default async function HealthPage() {
   const supabase = await createClient();
 
-  const [{ data: cronHealth }, { data: accounts }, { data: recentFailures }, { data: sendLock }, { data: unmatched }] =
-    await Promise.all([
+  const [
+    { data: cronHealth },
+    { data: accounts },
+    { data: recentFailures },
+    { data: sendLock },
+    { data: unmatched },
+    { data: abandonedResearch },
+    { count: abandonedResearchTotal },
+    { count: pendingResearch },
+  ] = await Promise.all([
       supabase.from("cron_health").select("job_name, last_run_at, last_result"),
       supabase.from("connected_accounts").select("id, email_address, status, last_error"),
       supabase
@@ -36,6 +44,28 @@ export default async function HealthPage() {
         .in("message_type", ["reply", "bounce"])
         .order("received_at", { ascending: false })
         .limit(20),
+      // When a contact hard-bounces or says they've left, the venue itself
+      // is usually still a real prospect -- so it goes to the replacement
+      // research queue to find whoever took over. When that research gives
+      // up, the row is marked and a note explains why, and until now that
+      // was the end of it: no screen anywhere showed these, so a venue
+      // dropping out of the pipeline was completely silent. 133 had
+      // accumulated unseen by 2026-09-22, nearly all of them timeouts
+      // rather than genuine dead ends (see findReplacement.ts).
+      supabase
+        .from("replacement_queue")
+        .select("id, venue, city, state, removed_contact_email, removed_reason, notes, researched_at")
+        .eq("status", "no_replacement_found")
+        .order("researched_at", { ascending: false })
+        .limit(25),
+      supabase
+        .from("replacement_queue")
+        .select("id", { count: "exact", head: true })
+        .eq("status", "no_replacement_found"),
+      supabase
+        .from("replacement_queue")
+        .select("id", { count: "exact", head: true })
+        .eq("status", "pending"),
     ]);
 
   // Mirrors the 5-minute self-expiry try_acquire_send_lock() itself applies
@@ -52,6 +82,55 @@ export default async function HealthPage() {
       <p className="mt-2 text-pretty text-sm text-muted">
         Cron heartbeats, account status, and deliverability signals in one place.
       </p>
+
+      {(abandonedResearchTotal ?? 0) > 0 && (
+        <section className="mt-8">
+          <h2 className="font-display text-[21px] font-medium text-ink">Venues needing a replacement contact</h2>
+          <p className="mt-1.5 text-pretty text-sm text-muted">
+            These venues lost their contact (a hard bounce, or they said they&apos;d left) and automated research
+            couldn&apos;t find a replacement, so nothing further will happen with them on its own. The venue is
+            usually still a real prospect — finding someone new there is a manual job.
+            {(pendingResearch ?? 0) > 0 && (
+              <>
+                {" "}
+                {pendingResearch} more {pendingResearch === 1 ? "is" : "are"} still queued for research.
+              </>
+            )}
+          </p>
+          <div className="mt-3 overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead className="border-b border-hairline-strong text-[10px] tracking-wide text-faint uppercase">
+                <tr>
+                  <th className="py-2 pr-3">Venue</th>
+                  <th className="py-2 pr-3">Where</th>
+                  <th className="py-2 pr-3">Lost contact</th>
+                  <th className="py-2 pr-3">Why research stopped</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(abandonedResearch ?? []).map((r) => (
+                  <tr key={r.id} className="border-b border-hairline-soft align-top">
+                    <td className="py-2.5 pr-3 text-ink">{r.venue ?? "—"}</td>
+                    <td className="py-2.5 pr-3 whitespace-nowrap text-muted-2">
+                      {[r.city, r.state].filter(Boolean).join(", ") || "—"}
+                    </td>
+                    <td className="py-2.5 pr-3 text-muted-3">
+                      {r.removed_contact_email}
+                      <span className="text-faint-2"> ({r.removed_reason})</span>
+                    </td>
+                    <td className="py-2.5 pr-3 text-xs text-muted-3">{r.notes ?? "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {(abandonedResearchTotal ?? 0) > (abandonedResearch ?? []).length && (
+            <p className="mt-2 text-xs text-faint-2">
+              Showing the {(abandonedResearch ?? []).length} most recent of {abandonedResearchTotal}.
+            </p>
+          )}
+        </section>
+      )}
 
       <section className="mt-8">
         <h2 className="font-display text-[21px] font-medium text-ink">Background jobs</h2>

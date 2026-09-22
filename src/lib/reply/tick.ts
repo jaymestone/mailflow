@@ -144,7 +144,33 @@ async function retryLabelOnly(
   // against the cheap budget, same as a bounce.
   if (budget.cheap <= 0) return "budget-exhausted"; // retried again next tick
   budget.cheap--;
-  const email = await fetchGmailMessage(accessToken, messageId);
+
+  let email;
+  try {
+    email = await fetchGmailMessage(accessToken, messageId);
+  } catch (err) {
+    // A 404 means the message is gone from Gmail for good (the mailbox
+    // owner deleted it), so there is nothing left to label and retrying
+    // can never succeed. Left alone, such a row stays "classified but
+    // unlabeled" forever, which the health alert correctly but uselessly
+    // reports every few hours -- confirmed live 2026-09-22: two messages
+    // deleted from Gmail on 2026-09-17 kept regenerating that alert for
+    // five days with no action a human could take.
+    //
+    // Stamping label_applied_at is deliberate: it means "no labelling
+    // work remains for this row," which is true. It is NOT deleted,
+    // because send_engine_who_is_due excludes a campaign member from
+    // further sends precisely by the existence of their matched inbound
+    // row -- dropping it would silently restart the sequence for someone
+    // who already replied.
+    const message = err instanceof Error ? err.message : String(err);
+    if (message.includes("Gmail get message failed: 404")) {
+      await supabase.from("inbound_messages").update({ label_applied_at: new Date().toISOString() }).eq("id", existing.id);
+      return "skipped";
+    }
+    throw err;
+  }
+
   await applyCategoryLabel(accessToken, account.id, email.gmailMessageId, existing.classification_category, email.labelIds, labelCache);
   await supabase.from("inbound_messages").update({ label_applied_at: new Date().toISOString() }).eq("id", existing.id);
   return "processed";

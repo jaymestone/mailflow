@@ -198,6 +198,64 @@ describe("runReplyPollTick", () => {
     expect(result.messagesFetched).toBe(0); // not counted as a newly-fetched message, it's a retry
   });
 
+  // Confirmed live 2026-09-22: two messages classified on 2026-09-17 were
+  // then deleted from Gmail. The label retry 404'd on every tick for five
+  // days, so the rows stayed "classified but unlabeled" forever and the
+  // health alert re-reported them every few hours with nothing a human
+  // could do. A gone message has no label work left, so the row is
+  // stamped resolved rather than retried indefinitely -- and pointedly
+  // NOT deleted, since send_engine_who_is_due relies on a matched inbound
+  // row to keep that member out of further sends.
+  it("stops retrying a label when the Gmail message no longer exists (404), instead of looping forever", async () => {
+    listNewMessageIds.mockReset().mockResolvedValueOnce({ messageIds: ["msg-gone"], newHistoryId: "100", wasReset: false });
+    fetchGmailMessage.mockReset().mockRejectedValueOnce(new Error("Gmail get message failed: 404 not found"));
+
+    const { applyGmailLabel } = await import("@/lib/gmail/labels");
+    vi.mocked(applyGmailLabel).mockClear();
+    let updatedFields: Record<string, unknown> | undefined;
+    const updateEq = vi.fn(async () => ({ data: null, error: null }));
+
+    const supabaseAccounts = {
+      from: (table: string) => {
+        if (table === "connected_accounts") {
+          return {
+            select: () => ({ eq: () => ({ data: [{ id: "acc-1", email_address: "stone@jaymestone.com", last_history_id: "50" }], error: null }) }),
+            update: () => ({ eq: async () => ({ data: null, error: null }) }),
+          };
+        }
+        if (table === "inbound_messages") {
+          return {
+            select: () => ({
+              eq: () => ({
+                eq: () => ({
+                  maybeSingle: async () => ({
+                    data: { id: "row-gone", classification_category: "interested", label_applied_at: null },
+                    error: null,
+                  }),
+                }),
+              }),
+            }),
+            update: (fields: Record<string, unknown>) => {
+              updatedFields = fields;
+              return { eq: updateEq };
+            },
+          };
+        }
+        return fakeSupabase().from(table);
+      },
+    } as unknown as SupabaseClient;
+
+    const result = await runReplyPollTick(supabaseAccounts);
+
+    // Resolved so it can't keep re-triggering the unlabeled-backlog alert.
+    expect(updatedFields).toHaveProperty("label_applied_at");
+    expect(updateEq).toHaveBeenCalledWith("id", "row-gone");
+    // Nothing was labelled -- there's no message left to label.
+    expect(applyGmailLabel).not.toHaveBeenCalled();
+    // And the 404 is handled, not surfaced as an account-level error.
+    expect(result.errors).toEqual([]);
+  });
+
   // Confirmed live, 2026-09-15: without persisting where a truncated
   // traversal left off, a high-volume account's checkpoint froze for hours
   // -- every tick restarted from the same old point and never got far

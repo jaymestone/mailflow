@@ -69,9 +69,16 @@ export async function classifyReply(
   // still queued behind this one. maxRetries: 0 since a stuck call should
   // fail fast, not double the wait — this message just gets picked up on
   // the next poll like any other per-message failure already does.
+  // Sonnet rather than Opus. This is a bounded classification into eight
+  // fixed categories against a JSON schema, with a date to pull out when
+  // one is stated -- not a task that needs the largest model. It is,
+  // however, the one AI cost that scales directly with sending volume
+  // (one call per genuine reply, 113 of them on 2026-09-21 alone), so it
+  // grows with the business in a way the other callers don't. Sonnet is
+  // also faster, which matters against the 12s timeout below.
   const response = await getClient().messages.create(
     {
-      model: "claude-opus-5",
+      model: "claude-sonnet-5",
       max_tokens: 1024,
       system: systemPrompt(),
       output_config: { format: { type: "json_schema", schema: SCHEMA } },

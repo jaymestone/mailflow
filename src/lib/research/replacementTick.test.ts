@@ -22,9 +22,22 @@ const ITEM = {
 /** Captures every replacement_queue update (in call order) plus whatever
  * other table reads processOneMessage-adjacent code needs, resolving with
  * sensible empty defaults everywhere else. */
-function fakeSupabase(item: typeof ITEM, updates: Record<string, unknown>[]): SupabaseClient {
+function fakeSupabase(
+  item: typeof ITEM,
+  updates: Record<string, unknown>[],
+  opts: { dailyCount?: { date: string; count: number } | null; capWrites?: Record<string, unknown>[] } = {},
+): SupabaseClient {
   return {
     from: (table: string) => {
+      if (table === "app_settings") {
+        return {
+          select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: opts.dailyCount ? { value: opts.dailyCount } : null, error: null }) }) }),
+          upsert: async (row: Record<string, unknown>) => {
+            opts.capWrites?.push(row);
+            return { data: null, error: null };
+          },
+        };
+      }
       if (table === "replacement_queue") {
         return {
           select: () => ({ eq: () => ({ order: () => ({ limit: async () => ({ data: [item], error: null }) }) }) }),
@@ -105,5 +118,62 @@ describe("runReplacementResearchTick", () => {
     const finalUpdate = updates[updates.length - 1];
     expect(finalUpdate.status).toBe("no_replacement_found");
     expect(finalUpdate.research_attempts).toBe(3);
+  });
+
+  // Every lookup is a Claude call with live web search, and search results
+  // are re-fed through the pause_turn loop as input tokens -- by far the
+  // most expensive thing Mailflow does. Moving this job to every 15
+  // minutes on 2026-09-18 took usage from ~200k to ~2.5M tokens/day. The
+  // cron schedule lives outside this codebase, so the ceiling has to be
+  // enforced here where it can't be changed by accident.
+  const today = new Date().toISOString().slice(0, 10);
+
+  it("does no research once the day's cap is spent", async () => {
+    const updates: Record<string, unknown>[] = [];
+    findReplacementContact.mockReset();
+
+    const supabase = fakeSupabase(ITEM, updates, { dailyCount: { date: today, count: 50 } });
+    const result = await runReplacementResearchTick(supabase);
+
+    expect(result.cappedOut).toBe(true);
+    expect(result.processed).toBe(0);
+    expect(findReplacementContact).not.toHaveBeenCalled(); // no API call, no spend
+    expect(updates).toEqual([]);
+  });
+
+  it("starts fresh when the stored count is from a previous day", async () => {
+    const updates: Record<string, unknown>[] = [];
+    findReplacementContact.mockReset().mockResolvedValueOnce({ found: false, note: "nothing" });
+
+    const supabase = fakeSupabase(ITEM, updates, { dailyCount: { date: "2020-01-01", count: 999 } });
+    const result = await runReplacementResearchTick(supabase);
+
+    expect(result.cappedOut).toBe(false);
+    expect(result.processed).toBe(1);
+  });
+
+  it("counts a lookup that throws, since the call was still paid for", async () => {
+    const updates: Record<string, unknown>[] = [];
+    const capWrites: Record<string, unknown>[] = [];
+    findReplacementContact.mockReset().mockRejectedValueOnce(new Error("Request timed out."));
+
+    const supabase = fakeSupabase(ITEM, updates, { dailyCount: { date: today, count: 7 }, capWrites });
+    const result = await runReplacementResearchTick(supabase);
+
+    expect(result.usedToday).toBe(8);
+    expect(capWrites[0]).toEqual({ key: "research_daily_count", value: { date: today, count: 8 } });
+  });
+
+  it("treats a missing counter row as zero used, not as no cap", async () => {
+    const updates: Record<string, unknown>[] = [];
+    const capWrites: Record<string, unknown>[] = [];
+    findReplacementContact.mockReset().mockResolvedValueOnce({ found: false, note: "nothing" });
+
+    const supabase = fakeSupabase(ITEM, updates, { dailyCount: null, capWrites });
+    const result = await runReplacementResearchTick(supabase);
+
+    expect(result.cappedOut).toBe(false);
+    // And it writes the row, so the cap is enforceable from here on.
+    expect(capWrites[0]).toEqual({ key: "research_daily_count", value: { date: today, count: 1 } });
   });
 });

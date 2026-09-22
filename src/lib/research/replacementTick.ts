@@ -7,6 +7,12 @@ export type ReplacementTickResult = {
   reenrolled: number;
   noReplacementFound: number;
   skipped: number;
+  /** True when today's research budget was already spent, so this run did
+   * nothing. Surfaced rather than silent so a permanently-capped queue is
+   * visible on the Health page instead of looking idle. */
+  cappedOut: boolean;
+  /** Research lookups used today, after this run. */
+  usedToday: number;
   errors: { id: string; error: string }[];
 };
 
@@ -27,6 +33,28 @@ const BATCH_SIZE = 1;
 // rest of the queue through.
 const MAX_RESEARCH_ATTEMPTS = 3;
 
+// A hard ceiling on research lookups per day, independent of how often
+// the cron fires. Every lookup is a Claude call with live web search, and
+// search results are re-sent through the pause_turn loop as input tokens,
+// which makes this by far the most expensive thing Mailflow does.
+//
+// Confirmed from the Anthropic usage dashboard, 2026-09-22: moving this
+// job from once daily to every 15 minutes on 2026-09-18 took token use
+// from ~200k/day to ~2.5M/day -- a ~10x jump, ~$15/day, and almost all of
+// it input tokens rather than output, which is the signature of search
+// results being re-fed on each continuation. Worse, nearly every one of
+// those calls was timing out and producing nothing.
+//
+// The cron schedule is set outside this codebase and is easy to change
+// without appreciating the cost, so the ceiling lives here where it can't
+// be bypassed by accident. At this rate a large backlog still drains in
+// days, which is fast enough for work that only matters when a venue
+// loses its contact.
+const DAILY_RESEARCH_CAP = 50;
+const DAILY_COUNT_KEY = "research_daily_count";
+
+type DailyCount = { date: string; count: number };
+
 export async function runReplacementResearchTick(supabase: SupabaseClient): Promise<ReplacementTickResult> {
   const result: ReplacementTickResult = {
     processed: 0,
@@ -34,8 +62,22 @@ export async function runReplacementResearchTick(supabase: SupabaseClient): Prom
     reenrolled: 0,
     noReplacementFound: 0,
     skipped: 0,
+    cappedOut: false,
+    usedToday: 0,
     errors: [],
   };
+
+  // UTC day, matching how send_counters keys its own daily tallies.
+  const today = new Date().toISOString().slice(0, 10);
+  const { data: countRow } = await supabase.from("app_settings").select("value").eq("key", DAILY_COUNT_KEY).maybeSingle();
+  const stored = countRow?.value as DailyCount | null | undefined;
+  const usedToday = stored && stored.date === today ? (stored.count ?? 0) : 0;
+  result.usedToday = usedToday;
+
+  if (usedToday >= DAILY_RESEARCH_CAP) {
+    result.cappedOut = true;
+    return result;
+  }
 
   const { data: pending } = await supabase
     .from("replacement_queue")
@@ -62,6 +104,21 @@ export async function runReplacementResearchTick(supabase: SupabaseClient): Prom
     // external kill still counts as a used attempt.
     const attempts = (item.research_attempts ?? 0) + 1;
     await supabase.from("replacement_queue").update({ research_attempts: attempts }).eq("id", item.id);
+
+    // Spend is recorded here for the same reason the attempt is: the cost
+    // is incurred the moment the call goes out, so a lookup that times out
+    // or is killed mid-flight must still count against the day's budget.
+    // Counting only successes would let a run of failures burn the whole
+    // day's money without ever moving the counter -- which is precisely
+    // the failure mode that produced the 2026-09-18 cost spike.
+    //
+    // Upsert, not the plain update this codebase uses elsewhere for
+    // app_settings: a missing key must not silently mean "no cap".
+    result.usedToday = usedToday + result.processed;
+    await supabase
+      .from("app_settings")
+      .upsert({ key: DAILY_COUNT_KEY, value: { date: today, count: result.usedToday } }, { onConflict: "key" });
+
     try {
       if (!item.venue) {
         // Nothing to research without a venue name to search for.

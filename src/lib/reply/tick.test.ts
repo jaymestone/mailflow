@@ -198,6 +198,52 @@ describe("runReplyPollTick", () => {
     expect(result.messagesFetched).toBe(0); // not counted as a newly-fetched message, it's a retry
   });
 
+  // Confirmed live 2026-09-22: 23 of Jayme's own replies had been ingested
+  // as inbound mail, 10 classified "interested" and labelled as such in
+  // Gmail -- phantom leads that were really his own messages. The SENT
+  // label only exists in the mailbox that sent a message, so it can't
+  // catch mail between two of our own accounts, which happens routinely
+  // because campaigns send from a round-robin account but set Reply-To to
+  // the reply-to account.
+  it("skips a message sent from one of our own connected accounts, even without a SENT label", async () => {
+    listNewMessageIds.mockReset().mockResolvedValueOnce({ messageIds: ["own-1"], newHistoryId: "100", wasReset: false });
+    // INBOX, no SENT -- exactly what a cross-account copy looks like.
+    fetchGmailMessage.mockReset().mockResolvedValueOnce(
+      fakeEmail({ gmailMessageId: "own-1", fromEmail: "agency@jaymestone.com", labelIds: ["INBOX", "UNREAD"] }),
+    );
+
+    const { classifyReply } = await import("./classify");
+    const { applyGmailLabel } = await import("@/lib/gmail/labels");
+    vi.mocked(classifyReply).mockClear();
+    vi.mocked(applyGmailLabel).mockClear();
+
+    const supabaseAccounts = {
+      from: (table: string) => {
+        if (table === "connected_accounts") {
+          return {
+            // Two shapes: the polled-accounts query (.eq on status) and the
+            // bare own-addresses query the tick now also issues.
+            select: () => ({
+              eq: () => ({ data: [{ id: "acc-1", email_address: "stone@jaymestone.com", last_history_id: "50", history_page_token: null }], error: null }),
+              then: (resolve: (v: { data: unknown; error: null }) => void) =>
+                resolve({ data: [{ email_address: "stone@jaymestone.com" }, { email_address: "agency@jaymestone.com" }], error: null }),
+            }),
+            update: () => ({ eq: async () => ({ data: null, error: null }) }),
+          };
+        }
+        return fakeSupabase().from(table);
+      },
+    } as unknown as SupabaseClient;
+
+    const result = await runReplyPollTick(supabaseAccounts);
+
+    // Never classified, never labelled, never counted as inbound mail.
+    expect(classifyReply).not.toHaveBeenCalled();
+    expect(applyGmailLabel).not.toHaveBeenCalled();
+    expect(result.messagesFetched).toBe(0);
+    expect(result.replies).toBe(0);
+  });
+
   // Confirmed live 2026-09-22: two messages classified on 2026-09-17 were
   // then deleted from Gmail. The label retry 404'd on every tick for five
   // days, so the rows stayed "classified but unlabeled" forever and the

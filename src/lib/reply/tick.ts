@@ -209,6 +209,11 @@ export async function processOneMessage(
   labelCache: Map<string, string>,
   result: ReplyTickResult,
   budget: MessageBudget,
+  /** Every address this system owns, lowercased -- not just the account
+   * being polled, since a message from one of our accounts to another
+   * arrives with no SENT label. Defaults to empty so existing callers and
+   * tests behave exactly as before. */
+  ownAddresses: Set<string> = new Set(),
 ): Promise<"processed" | "skipped" | "budget-exhausted"> {
   try {
     const { data: existing } = await supabase
@@ -234,6 +239,23 @@ export async function processOneMessage(
 
     const email = await fetchGmailMessage(accessToken, messageId);
     if (email.labelIds.includes("SENT")) return "skipped"; // our own outbound copy
+
+    // The SENT label only exists in the mailbox that actually sent the
+    // message, so it cannot catch mail between two of our OWN connected
+    // accounts. That happens routinely here: campaigns send from whichever
+    // account round-robin picks but set Reply-To to the reply-to account,
+    // so replying from one address puts a copy in another's inbox as a
+    // genuine INBOX message with no SENT label. Confirmed live
+    // 2026-09-22: 23 of Jayme's own replies had been ingested as inbound
+    // mail this way, 10 of them classified "interested" and labelled as
+    // such in Gmail -- phantom leads that are really his own messages.
+    //
+    // None had matched a contact, but the risk isn't only cosmetic: a
+    // manual follow-up sent in reply to Mailflow's own send carries the
+    // original Message-ID in In-Reply-To, which tier 1 of matching would
+    // resolve to that contact -- recording Jayme's words as the venue's
+    // reply and silently halting their sequence.
+    if (ownAddresses.has(email.fromEmail.toLowerCase())) return "skipped";
 
     // classifyBounce is instant and local (no network call) -- safe to run
     // before either budget check below, since it's what decides which
@@ -565,6 +587,13 @@ export async function runReplyPollTick(supabase: SupabaseClient): Promise<ReplyT
   // for app_settings (see round_robin_cursor in send/tick.ts) -- the row is
   // pre-seeded once rather than auto-created here, so a missing key simply
   // no-ops (falls back to cursor 0 below) instead of failing.
+  // Every address this system owns, used below to recognise mail we sent
+  // ourselves. Deliberately NOT filtered to status='active': a
+  // disconnected or errored account's address is still ours, and mail
+  // from it is still not a venue reply.
+  const { data: allAccountRows } = await supabase.from("connected_accounts").select("email_address");
+  const ownAddresses = new Set((allAccountRows ?? []).map((a: { email_address: string }) => a.email_address.toLowerCase()));
+
   const { data: cursorRow } = await supabase.from("app_settings").select("value").eq("key", "reply_round_robin_cursor").maybeSingle();
   const cursor = typeof cursorRow?.value === "number" ? cursorRow.value : 0;
   const accounts = rawAccounts && rawAccounts.length > 0 ? [...rawAccounts.slice(cursor % rawAccounts.length), ...rawAccounts.slice(0, cursor % rawAccounts.length)] : rawAccounts;
@@ -609,7 +638,7 @@ export async function runReplyPollTick(supabase: SupabaseClient): Promise<ReplyT
           hitBatchCap = true;
           break;
         }
-        const outcome = await processOneMessage(supabase, account, messageId, accessToken, labelCache, result, budget);
+        const outcome = await processOneMessage(supabase, account, messageId, accessToken, labelCache, result, budget, ownAddresses);
         // A message that needed the specific bucket (cheap or expensive)
         // already spent this tick was never actually looked at -- the
         // checkpoint must not advance past it even though the *other*
@@ -635,7 +664,7 @@ export async function runReplyPollTick(supabase: SupabaseClient): Promise<ReplyT
         const recoveryIds = await searchMessageIds(accessToken, `newer_than:${HISTORY_RESET_RECOVERY_WINDOW_DAYS}d`);
         let recovered = 0;
         for (const messageId of recoveryIds) {
-          const outcome = await processOneMessage(supabase, account, messageId, accessToken, labelCache, result, budget);
+          const outcome = await processOneMessage(supabase, account, messageId, accessToken, labelCache, result, budget, ownAddresses);
           if (outcome === "processed") recovered++;
         }
         result.historyResets.push({ account: account.email_address, recovered });

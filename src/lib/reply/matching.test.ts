@@ -7,10 +7,15 @@ type Filters = Record<string, unknown>;
 type Resolver = (table: string, filters: Filters) => Record<string, unknown> | null;
 
 /** Minimal stand-in for the chained `.from().select().eq()...maybeSingle()`
- * query builder — records every `.eq()` filter applied, then hands the
- * table name and accumulated filters to a per-test `resolver` when the
- * chain is finally awaited, so each test can control exactly which query
- * "finds" a row without needing a real database. */
+ * query builder — records every `.eq()`/`.ilike()` filter applied, then
+ * hands the table name and accumulated filters to a per-test `resolver`
+ * when the chain is finally awaited, so each test can control exactly
+ * which query "finds" a row without needing a real database.
+ *
+ * Resolving works two ways because the real code uses both shapes: via
+ * `.maybeSingle()` (one row or null) and by awaiting the builder itself
+ * (a list) — the tier-3 contact lookup does the latter, since it filters
+ * with ilike and then re-checks the case in JS. */
 class MockQuery {
   private filters: Filters = {};
   constructor(
@@ -24,6 +29,13 @@ class MockQuery {
     this.filters[field] = value;
     return this;
   }
+  /** Recorded under the same key as `.eq()` so a resolver can treat them
+   * alike; the wildcard-escaping the real query applies is undone here so
+   * tests can match on the plain address. */
+  ilike(field: string, value: unknown) {
+    this.filters[field] = typeof value === "string" ? value.replace(/\\([%_\\])/g, "$1") : value;
+    return this;
+  }
   order() {
     return this;
   }
@@ -32,6 +44,10 @@ class MockQuery {
   }
   async maybeSingle() {
     return { data: this.resolver(this.table, this.filters), error: null };
+  }
+  then<T>(resolve: (v: { data: unknown[]; error: null }) => T): T {
+    const row = this.resolver(this.table, this.filters);
+    return resolve({ data: row ? [row] : [], error: null });
   }
 }
 
@@ -122,7 +138,9 @@ describe("matchInboundMessage", () => {
 
   it("falls back to sender email against an active campaign member (tier 3)", async () => {
     const supabase = mockSupabase((table, filters) => {
-      if (table === "contacts" && filters.email === "venue@example.com") return { id: "contact-5" };
+      if (table === "contacts" && filters.email === "venue@example.com") {
+        return { id: "contact-5", email: "venue@example.com" };
+      }
       if (table === "campaign_members" && filters.contact_id === "contact-5" && filters.member_status === "active") {
         return { campaign_id: "camp-5", contact_id: "contact-5" };
       }
@@ -137,9 +155,63 @@ describe("matchInboundMessage", () => {
     });
   });
 
+  // Confirmed live 2026-09-22: a contact stored as
+  // `Josh@OtterCreekMusicFestival.com` replied from the all-lowercase
+  // form with a genuinely interested message. The old exact-match `.eq()`
+  // missed it, so the reply stayed unmatched and the send engine -- which
+  // only skips members whose reply actually matched -- kept him queued for
+  // automated follow-ups. 376 of ~6,270 contacts had uppercase in their
+  // stored address, so this was a standing ~6% hole, not an edge case.
+  it("matches the sender email case-insensitively (tier 3)", async () => {
+    const supabase = mockSupabase((table, filters) => {
+      // Resolver compares case-insensitively, standing in for ilike.
+      if (
+        table === "contacts" &&
+        String(filters.email).toLowerCase() === "josh@ottercreekmusicfestival.com"
+      ) {
+        return { id: "contact-7", email: "Josh@OtterCreekMusicFestival.com" };
+      }
+      if (table === "campaign_members" && filters.contact_id === "contact-7" && filters.member_status === "active") {
+        return { campaign_id: "camp-7", contact_id: "contact-7" };
+      }
+      return null;
+    });
+    const result = await matchInboundMessage(
+      supabase,
+      email({ fromEmail: "josh@ottercreekmusicfestival.com" }),
+    );
+    expect(result).toEqual({
+      campaignId: "camp-7",
+      contactId: "contact-7",
+      outboundSendId: null,
+      matchMethod: "sender_email",
+    });
+  });
+
+  // ilike treats % and _ as wildcards. Without escaping, a reply from an
+  // address containing either could match a *different* contact and
+  // attribute the reply -- and any resulting pause/suppress -- to the
+  // wrong person. The JS re-check is the backstop that makes this safe.
+  it("does not let ilike wildcards in the sender address match a different contact", async () => {
+    const supabase = mockSupabase((table) => {
+      if (table === "contacts") {
+        // A naive ilike would let `a_b@x.com` match `aXb@x.com`; the
+        // resolver returns that wrong-but-wildcard-compatible row.
+        return { id: "contact-wrong", email: "aXb@x.com" };
+      }
+      if (table === "campaign_members") return { campaign_id: "camp-wrong", contact_id: "contact-wrong" };
+      return null;
+    });
+    const result = await matchInboundMessage(supabase, email({ fromEmail: "a_b@x.com" }));
+    expect(result.matchMethod).toBe("unmatched");
+    expect(result.contactId).toBeNull();
+  });
+
   it("returns unmatched when the sender's contact has no active campaign membership", async () => {
     const supabase = mockSupabase((table, filters) => {
-      if (table === "contacts" && filters.email === "venue@example.com") return { id: "contact-6" };
+      if (table === "contacts" && filters.email === "venue@example.com") {
+        return { id: "contact-6", email: "venue@example.com" };
+      }
       return null; // no active campaign_members row
     });
     const result = await matchInboundMessage(supabase, email({ fromEmail: "venue@example.com" }));

@@ -60,11 +60,35 @@ export async function matchInboundMessage(
   }
 
   // 3. Sender email against an active campaign member (last resort).
-  const { data: contact } = await supabase
+  //
+  // Case-insensitive on purpose. Email local parts are technically
+  // case-sensitive per RFC 5321, but in practice no real mail system
+  // treats them that way, and the address a contact was *imported* with
+  // frequently differs in casing from the one their mail client puts in
+  // the From header. `.eq()` here was an exact, case-sensitive compare,
+  // so any such contact silently fell through to unmatched -- confirmed
+  // live 2026-09-22: a contact stored as `Josh@OtterCreekMusicFestival.com`
+  // replied from `josh@ottercreekmusicfestival.com` with a genuinely
+  // interested response, didn't match, and so was never excluded from
+  // further automated follow-ups (send_engine_who_is_due only skips
+  // members whose reply actually matched). 376 of ~6,270 contacts had
+  // uppercase in their stored address at the time, so this was a
+  // standing ~6% hole in reply detection, not a one-off.
+  //
+  // contacts already has a unique index on lower(email), so there can be
+  // at most one case-insensitive match. PostgREST can't express
+  // `lower(col) = lower($1)` directly, so this filters with ilike (the
+  // same approach the suppression checks in reply/tick.ts already use)
+  // and then re-verifies in JS -- ilike treats % and _ as wildcards, and
+  // an address containing either could otherwise match a *different*
+  // contact, which would attribute a reply to the wrong person.
+  const { data: candidates } = await supabase
     .from("contacts")
-    .select("id")
-    .eq("email", email.fromEmail)
-    .maybeSingle();
+    .select("id, email")
+    .ilike("email", email.fromEmail.replace(/([%_\\])/g, "\\$1"))
+    .limit(5);
+  const wanted = email.fromEmail.toLowerCase();
+  const contact = (candidates ?? []).find((c) => c.email.toLowerCase() === wanted) ?? null;
   if (contact) {
     const { data: member } = await supabase
       .from("campaign_members")

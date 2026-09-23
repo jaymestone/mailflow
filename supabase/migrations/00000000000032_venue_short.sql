@@ -33,9 +33,29 @@ comment on column contacts.venue_short is
 
 -- The send engine selects an explicit column list, so venue_short has to
 -- be added here to reach resolveTemplate at all. Otherwise unchanged from
--- migration 15 -- the ooo_temporary/resume_at behaviour and the reply
--- blocking rules are carried over verbatim.
-create or replace function send_engine_who_is_due(batch_limit int default 100)
+-- migration 17, which is the latest definition -- the ooo_temporary /
+-- resume_at behaviour, the reply blocking rules, and the
+-- test_delay_minutes cadence override are all carried over verbatim.
+--
+-- Worth stating which migration this was rebuilt from, because the first
+-- attempt used 15 and would have silently dropped 17's
+-- test_delay_minutes override -- the thing that lets a step fire minutes
+-- apart instead of days when testing a campaign. Redefining a function
+-- means restating ALL of it, so every prior migration that touched it has
+-- to be found first; grep the migrations directory rather than assuming
+-- the one you remember is the last.
+--
+-- Wrapped in a transaction with an explicit DROP because adding a column
+-- to the RETURNS TABLE changes the function's return type, and postgres
+-- refuses that through CREATE OR REPLACE alone (42P13). The drop and
+-- recreate must be atomic: the send engine calls this function every five
+-- minutes, so a gap between the two statements is a window in which a
+-- tick fails outright.
+begin;
+
+drop function if exists send_engine_who_is_due(int);
+
+create function send_engine_who_is_due(batch_limit int default 100)
 returns table (
   campaign_member_id uuid,
   campaign_id uuid,
@@ -80,7 +100,7 @@ as $$
       or (
         cm.last_sent_at is not null
         and greatest(cm.last_sent_at, coalesce(cm.resume_at, cm.last_sent_at))
-          + (ct.days_after_previous || ' days')::interval <= now()
+          + coalesce(ct.test_delay_minutes || ' minutes', ct.days_after_previous || ' days')::interval <= now()
       )
     )
   order by cm.added_at
@@ -88,3 +108,5 @@ as $$
 $$;
 
 grant execute on function send_engine_who_is_due(int) to service_role;
+
+commit;

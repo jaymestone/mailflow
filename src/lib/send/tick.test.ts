@@ -18,6 +18,9 @@ class MockBuilder implements PromiseLike<{ data: unknown; error: null }> {
   in() {
     return this;
   }
+  neq() {
+    return this;
+  }
   lt() {
     return this;
   }
@@ -351,5 +354,96 @@ describe("runSendTick soft time deadline", () => {
 
     expect(result.sent).toBe(0);
     expect(result.details.some((d) => d.outcome.includes("soft time deadline"))).toBe(true);
+  });
+});
+
+describe("runSendTick step-3 variant selection", () => {
+  const ARTIST = (slug: string) => `https://www.jaymestone.com/agency/${slug}`;
+
+  function clickRow(contactId: string, label: string, slug: string, clickedAt: string) {
+    return { clicked_at: clickedAt, link_tokens: { contact_id: contactId, label, destination_url: ARTIST(slug) } };
+  }
+
+  /** A step-3 member plus the three alternative bodies for that step. */
+  function variantWorld(clicks: unknown[]) {
+    return mockSupabase(
+      {
+        app_settings: [{ key: "round_robin_cursor", value: -1 }],
+        connected_accounts: [{ ...account("acc-a"), ramp_schedule: HIGH_RAMP }],
+        send_counters: [],
+        outbound_sends: [],
+        campaign_templates: [
+          { campaign_id: "camp-1", step_number: 3, variant: "clicked_focused", subject: "", body: "I think {{Clicked Artists}} could be especially good for your audience." },
+          { campaign_id: "camp-1", step_number: 3, variant: "clicked_broad", subject: "", body: "Happy to suggest a few that might be a good fit." },
+          { campaign_id: "camp-1", step_number: 3, variant: "no_click", subject: "", body: "Last one from me, I promise." },
+        ],
+        link_clicks: clicks,
+      },
+      {
+        send_engine_who_is_due: [
+          dueMember({ current_step: 2, next_step: 3, body: "DEFAULT BODY", recipient_domain: "a.org", email: "v@a.org" }),
+        ],
+      },
+    );
+  }
+
+  it("names the artists a focused clicker actually opened", async () => {
+    const supabase = variantWorld([
+      clickRow("contact-1", "SUMMER CAMARGO", "summer-camargo", "2026-09-10T10:00:00Z"),
+      clickRow("contact-1", "RAKISH", "rakish", "2026-09-10T10:04:00Z"),
+    ]);
+
+    const result = await runSendTick(supabase, { dryRun: true, ignoreSendWindow: true });
+
+    expect(result.sent).toBe(1);
+    expect(result.details[0].variant).toBe("clicked_focused");
+  });
+
+  it("uses the broad body, naming nobody, once four artists were opened", async () => {
+    const supabase = variantWorld(
+      ["summer-camargo", "rakish", "lily-henley", "samir-langus"].map((slug, i) =>
+        clickRow("contact-1", slug.toUpperCase(), slug, `2026-09-10T10:0${i}:00Z`),
+      ),
+    );
+
+    const result = await runSendTick(supabase, { dryRun: true, ignoreSendWindow: true });
+
+    expect(result.sent).toBe(1);
+    expect(result.details[0].variant).toBe("clicked_broad");
+  });
+
+  it("falls to the no-click body when nothing was genuinely clicked", async () => {
+    const result = await runSendTick(variantWorld([]), { dryRun: true, ignoreSendWindow: true });
+
+    expect(result.sent).toBe(1);
+    expect(result.details[0].variant).toBe("no_click");
+  });
+
+  it("ignores scanner traffic, since only human-classified clicks are read", async () => {
+    // The query filters click_class='human'; the mock returns whatever it
+    // is given, so this asserts the shape rather than the filter. The
+    // filter itself is covered in interest.test.ts.
+    const result = await runSendTick(variantWorld([]), { dryRun: true, ignoreSendWindow: true });
+
+    expect(result.details[0].variant).toBe("no_click");
+  });
+
+  it("leaves campaigns without variants completely alone", async () => {
+    const supabase = mockSupabase(
+      {
+        app_settings: [{ key: "round_robin_cursor", value: -1 }],
+        connected_accounts: [{ ...account("acc-a"), ramp_schedule: HIGH_RAMP }],
+        send_counters: [],
+        outbound_sends: [],
+        campaign_templates: [],
+        link_clicks: [],
+      },
+      { send_engine_who_is_due: [dueMember({ body: "PLAIN STEP 2 BODY" })] },
+    );
+
+    const result = await runSendTick(supabase, { dryRun: true, ignoreSendWindow: true });
+
+    expect(result.sent).toBe(1);
+    expect(result.details[0].variant).toBeUndefined();
   });
 });

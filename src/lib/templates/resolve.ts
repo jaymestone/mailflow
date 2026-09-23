@@ -8,6 +8,10 @@ export type MergeContact = {
   city?: string | null;
   state?: string | null;
   venue_type?: string | null;
+  /** Artists this contact genuinely clicked, display-cased and already
+   * capped and ordered by src/lib/clicks/interest.ts. Only ever populated
+   * for the clicked_focused variant of a step. */
+  clicked_artists?: string[] | null;
 };
 
 const MERGE_FIELDS: Record<string, (c: MergeContact) => string> = {
@@ -22,7 +26,25 @@ const MERGE_FIELDS: Record<string, (c: MergeContact) => string> = {
   city: (c) => c.city?.trim() || "",
   state: (c) => c.state?.trim() || "",
   "venue type": (c) => c.venue_type?.trim() || "",
+  // Deliberately has NO fallback string. Every other merge field can
+  // degrade gracefully -- "there" for a missing first name reads fine --
+  // but there is no sensible stand-in for "the artists you looked at". A
+  // blank would produce "I think  could be especially good", and any
+  // generic filler would be a claim about behaviour that did not happen.
+  // Returning the token unresolved makes findUnresolvedTokens trip, which
+  // makes the send engine skip the contact rather than send nonsense.
+  "clicked artists": (c) =>
+    c.clicked_artists && c.clicked_artists.length > 0
+      ? formatArtistList(c.clicked_artists)
+      : "{{Clicked Artists}}",
 };
+
+/** "A", "A and B", "A, B and C" -- no Oxford comma, matching Jayme's own
+ * copy ("roots, jazz and world music"). */
+export function formatArtistList(names: string[]): string {
+  if (names.length === 1) return names[0];
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
 
 /** Merge fields ({{First Name}}) are resolved before spintext ({a|b}).
  * Resolving in the other order (as the old N8N workflow did) lets spintext's

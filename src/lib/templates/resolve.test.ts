@@ -37,6 +37,28 @@ describe("resolveMergeFields", () => {
     expect(resolveMergeFields("{{Venue}}", { venue: null, venue_short: null })).toBe("your venue");
   });
 
+  it("writes the clicked artists the way a person lists names", () => {
+    const one = { clicked_artists: ["Summer Camargo"] };
+    const two = { clicked_artists: ["Summer Camargo", "Rakish"] };
+    const three = { clicked_artists: ["Summer Camargo", "Rakish", "Lily Henley"] };
+
+    expect(resolveMergeFields("{{Clicked Artists}}", one)).toBe("Summer Camargo");
+    expect(resolveMergeFields("{{Clicked Artists}}", two)).toBe("Summer Camargo and Rakish");
+    // No Oxford comma, matching Jayme's own "roots, jazz and world music".
+    expect(resolveMergeFields("{{Clicked Artists}}", three)).toBe("Summer Camargo, Rakish and Lily Henley");
+  });
+
+  it("leaves {{Clicked Artists}} unresolved when there are none, so the send is skipped", () => {
+    // Every other field degrades gracefully; this one must not. A blank
+    // would read "I think  could be especially good for you", and any
+    // filler would assert behaviour that never happened. Leaving the token
+    // intact makes findUnresolvedTokens trip and the send engine skip.
+    expect(findUnresolvedTokens(resolveMergeFields("I think {{Clicked Artists}} suit you", {}))).not.toHaveLength(0);
+    expect(findUnresolvedTokens(resolveMergeFields("{{Clicked Artists}}", { clicked_artists: [] }))).not.toHaveLength(
+      0,
+    );
+  });
+
   it("leaves an unknown field name untouched", () => {
     expect(resolveMergeFields("{{Not A Field}}", {})).toBe("{{Not A Field}}");
   });

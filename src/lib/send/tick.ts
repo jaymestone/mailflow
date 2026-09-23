@@ -3,7 +3,8 @@ import { randomBytes, randomUUID } from "crypto";
 import { effectiveCap, pickNextAccount, type SendAccount } from "./roundRobin";
 import { buildFollowUpContent } from "./buildFollowUp";
 import { injectClickTracking } from "./clickTracking";
-import { findUnresolvedTokens, resolveTemplate } from "@/lib/templates/resolve";
+import { findUnresolvedTokens, resolveTemplate, type MergeContact } from "@/lib/templates/resolve";
+import { resolveInterest, type ContactInterest, type InterestBucket } from "@/lib/clicks/interest";
 import { wrapEmailHtml } from "@/lib/templates/emailHtml";
 import { formatFromAddress, getAccessToken, sendGmailMessage } from "@/lib/gmail/client";
 import { OAuthTokenRevokedError } from "@/lib/oauth/google";
@@ -167,7 +168,17 @@ export type SendTickResult = {
   skippedDomainCap: number;
   skippedUnresolvedTemplate: number;
   skippedQueryError: number;
-  details: { email: string; outcome: string; account?: string }[];
+  details: {
+    email: string;
+    outcome: string;
+    account?: string;
+    /** Which body was chosen, on steps that have alternatives. Carried so
+     * a dry run is a genuine preview of who gets which email, not just a
+     * count -- see the preview script and the variant tests. */
+    variant?: string;
+    /** The fully resolved subject, on a dry run. */
+    subject?: string;
+  }[];
 };
 
 function isWithinSendWindow(sendWindow: {
@@ -201,6 +212,60 @@ function fetchPriorSends(supabase: SupabaseClient, member: DueMember) {
     .eq("status", "sent")
     .lt("step_number", member.next_step)
     .order("step_number", { ascending: true });
+}
+
+type StepVariant = { subject: string; body: string };
+
+function variantKey(campaignId: string, stepNumber: number): string {
+  return `${campaignId}|${stepNumber}`;
+}
+
+/** Non-default bodies for every (campaign, step) in this batch, keyed so a
+ * step with no alternatives is simply absent and costs nothing. */
+async function loadTemplateVariants(
+  supabase: SupabaseClient,
+  members: DueMember[],
+): Promise<Map<string, Map<InterestBucket, StepVariant>>> {
+  const byStep = new Map<string, Map<InterestBucket, StepVariant>>();
+  if (members.length === 0) return byStep;
+
+  const campaignIds = [...new Set(members.map((m) => m.campaign_id))];
+  const steps = [...new Set(members.map((m) => m.next_step))];
+
+  const { data, error } = await supabase
+    .from("campaign_templates")
+    .select("campaign_id, step_number, variant, subject, body")
+    .in("campaign_id", campaignIds)
+    .in("step_number", steps)
+    .neq("variant", "default");
+
+  // Not fatal: with no variants loaded every member keeps the default body
+  // the send query already returned, which is exactly today's behaviour.
+  if (error || !data) return byStep;
+
+  for (const row of data) {
+    const key = variantKey(row.campaign_id, row.step_number);
+    if (!byStep.has(key)) byStep.set(key, new Map());
+    byStep.get(key)!.set(row.variant as InterestBucket, { subject: row.subject, body: row.body });
+  }
+  return byStep;
+}
+
+/** Campaign -> contacts whose variant actually depends on click history.
+ * Members on a step with no variants are skipped entirely, so campaigns
+ * that don't use this feature never pay for the lookup. */
+function contactsNeedingInterest(
+  members: DueMember[],
+  variantsByStep: Map<string, Map<InterestBucket, StepVariant>>,
+): Map<string, string[]> {
+  const byCampaign = new Map<string, string[]>();
+  for (const member of members) {
+    const variants = variantsByStep.get(variantKey(member.campaign_id, member.next_step));
+    if (!variants || variants.size === 0) continue;
+    if (!byCampaign.has(member.campaign_id)) byCampaign.set(member.campaign_id, []);
+    byCampaign.get(member.campaign_id)!.push(member.contact_id);
+  }
+  return byCampaign;
 }
 
 export async function runSendTick(
@@ -292,6 +357,33 @@ export async function runSendTick(
     });
     const members: DueMember[] = dueMembers ?? [];
 
+    // Variant selection, resolved for the whole batch up front.
+    //
+    // send_engine_who_is_due joins only the 'default' body (migration 33),
+    // so a step that has alternatives arrives here carrying the wrong one.
+    // Whether a contact should instead get the "you looked at these
+    // artists" or the "last note" version depends on their own click
+    // history, which is per-contact -- but looked up per-contact it would
+    // be twenty extra round trips inside a 22-second budget, so it is
+    // batched by campaign here instead.
+    const variantsByStep = await loadTemplateVariants(supabase, members);
+    const interestByCampaign = new Map<string, Map<string, ContactInterest>>();
+    for (const [campaignId, contactIds] of contactsNeedingInterest(members, variantsByStep)) {
+      try {
+        interestByCampaign.set(campaignId, await resolveInterest(supabase, campaignId, contactIds));
+      } catch (err) {
+        // Without this the whole batch would silently fall back to
+        // "no_click" and send the generic last-note email to contacts who
+        // had genuinely engaged -- an unrecoverable wrong impression, for
+        // what is only a failed lookup. Skipping the affected campaign
+        // this tick costs nothing: it retries in five minutes.
+        result.details.push({
+          email: "",
+          outcome: `skipped campaign ${campaignId}: could not resolve click interest (${err instanceof Error ? err.message : String(err)})`,
+        });
+      }
+    }
+
     const domainsSentThisTick = new Set<string>();
 
     for (const member of members) {
@@ -321,8 +413,41 @@ export async function runSendTick(
         continue;
       }
 
-      const subject = resolveTemplate(member.subject, member);
-      const body = resolveTemplate(member.body, member);
+      // Swap in the variant this contact's behaviour calls for, if the
+      // step has any. A step with no variants keeps the body the query
+      // already returned, so every existing campaign is unaffected.
+      const stepVariants = variantsByStep.get(variantKey(member.campaign_id, member.next_step));
+      let templateSubject = member.subject;
+      let templateBody = member.body;
+      let mergeData: MergeContact = member;
+      let chosenVariant: string | undefined;
+
+      if (stepVariants && stepVariants.size > 0) {
+        const interest =
+          interestByCampaign.get(member.campaign_id)?.get(member.contact_id);
+        if (!interest) {
+          // Only reachable when the lookup above failed for this campaign.
+          result.skippedQueryError++;
+          result.details.push({ email: member.email, outcome: "skipped: click interest unavailable this tick" });
+          continue;
+        }
+        const chosen = stepVariants.get(interest.bucket);
+        if (chosen) {
+          templateSubject = chosen.subject;
+          templateBody = chosen.body;
+          chosenVariant = interest.bucket;
+        } else {
+          // The step has variants but not one for this bucket, so the
+          // default body stands. Recorded rather than inferred, so a
+          // half-authored step is visible in a dry run instead of quietly
+          // sending everyone the same thing.
+          chosenVariant = `default (no ${interest.bucket} body)`;
+        }
+        mergeData = { ...member, clicked_artists: interest.artists };
+      }
+
+      const subject = resolveTemplate(templateSubject, mergeData);
+      const body = resolveTemplate(templateBody, mergeData);
       const unresolved = [...findUnresolvedTokens(subject), ...findUnresolvedTokens(body)];
       if (unresolved.length > 0) {
         result.skippedUnresolvedTemplate++;
@@ -398,7 +523,13 @@ export async function runSendTick(
         sentCounts.set(picked.account.id, (sentCounts.get(picked.account.id) ?? 0) + 1);
         if (capsApplyToDomain) domainsSentThisTick.add(member.recipient_domain);
         result.sent++;
-        result.details.push({ email: member.email, outcome: "would send", account: picked.account.email_address });
+        result.details.push({
+          email: member.email,
+          outcome: "would send",
+          account: picked.account.email_address,
+          variant: chosenVariant,
+          subject,
+        });
         continue;
       }
 

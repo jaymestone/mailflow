@@ -165,20 +165,25 @@ const HIGH_RAMP = [{ after_days: 0, cap: 1000 }]; // high enough that account da
 
 describe("runSendTick candidate pool vs. per-tick domain cap", () => {
   it("looks past a domain-clustered front of the queue to find a distinct-domain send", async () => {
-    // 55 due members all sharing one domain (only the first can send this
-    // tick -- the rest hit the domain cap), then one due member on a
-    // different domain. If the fetch size were as small as the real send
-    // cap (well under 55), that 56th member would never even be fetched.
-    // It should still get a real send once the candidate pool is large
-    // enough to reach it.
+    // 55 due members all sharing one ORGANISATION's domain (only the first
+    // can send this tick -- the rest hit the domain cap), then one due
+    // member on a different domain. If the fetch size were as small as the
+    // real send cap (well under 55), that 56th member would never even be
+    // fetched. It should still get a real send once the candidate pool is
+    // large enough to reach it.
+    //
+    // Deliberately NOT gmail.com, though this cluster was gmail.com when
+    // the test was written: consumer mailbox providers are now exempt from
+    // the per-tick domain cap (see CONSUMER_MAILBOX_DOMAINS in tick.ts), so
+    // using one here would no longer exercise the cap at all.
     const clustered = Array.from({ length: 55 }, (_, i) =>
       dueMember({
-        campaign_member_id: `cm-gmail-${i}`,
-        contact_id: `contact-gmail-${i}`,
+        campaign_member_id: `cm-clustered-${i}`,
+        contact_id: `contact-clustered-${i}`,
         current_step: 0,
         next_step: 1,
-        email: `venue${i}@gmail.com`,
-        recipient_domain: "gmail.com",
+        email: `staff${i}@one-big-university.edu`,
+        recipient_domain: "one-big-university.edu",
       }),
     );
     const distinctDomain = dueMember({
@@ -202,9 +207,85 @@ describe("runSendTick candidate pool vs. per-tick domain cap", () => {
 
     const result = await runSendTick(supabase, { dryRun: true, ignoreSendWindow: true });
 
-    expect(result.sent).toBe(2); // the one gmail.com send + the distinct-domain one
+    expect(result.sent).toBe(2); // the one university send + the distinct-domain one
     expect(result.skippedDomainCap).toBe(54);
     expect(result.details.some((d) => d.email === "venue@a-totally-different-domain.org" && d.outcome === "would send")).toBe(true);
+  });
+
+  // Regression: confirmed live 2026-09-23 that a queue of 149 due contacts,
+  // every one of them a gmail.com address, sent exactly ONE mail per
+  // 5-minute tick -- roughly 108 sends/day against 1,350 of configured
+  // capacity. The domain cap is there to spare one organisation's mail
+  // server a burst; it protects nothing when the "domain" is a consumer
+  // mailbox provider shared by hundreds of unrelated individuals.
+  it("does not apply the per-tick domain cap to consumer mailbox providers", async () => {
+    const allGmail = Array.from({ length: 40 }, (_, i) =>
+      dueMember({
+        campaign_member_id: `cm-gmail-${i}`,
+        contact_id: `contact-gmail-${i}`,
+        current_step: 0,
+        next_step: 1,
+        email: `booker${i}@gmail.com`,
+        recipient_domain: "gmail.com",
+      }),
+    );
+
+    const supabase = mockSupabase(
+      {
+        app_settings: [{ key: "round_robin_cursor", value: -1 }],
+        connected_accounts: [{ ...account("acc-a"), ramp_schedule: HIGH_RAMP }],
+        send_counters: [],
+        outbound_sends: [],
+      },
+      { send_engine_who_is_due: allGmail },
+    );
+
+    const result = await runSendTick(supabase, { dryRun: true, ignoreSendWindow: true });
+
+    // Bounded by the per-tick batch limit, not throttled down to 1.
+    expect(result.sent).toBe(20);
+    expect(result.skippedDomainCap).toBe(0);
+  });
+
+  it("still caps a single organisation's domain while letting consumer addresses through in the same tick", async () => {
+    // The two rules have to coexist: one send to the university, and every
+    // gmail.com recipient still free to go out alongside it.
+    const university = Array.from({ length: 5 }, (_, i) =>
+      dueMember({
+        campaign_member_id: `cm-edu-${i}`,
+        contact_id: `contact-edu-${i}`,
+        current_step: 0,
+        next_step: 1,
+        email: `staff${i}@one-big-university.edu`,
+        recipient_domain: "one-big-university.edu",
+      }),
+    );
+    const consumer = ["gmail.com", "yahoo.com", "hotmail.com", "aol.com", "gmail.com"].map((domain, i) =>
+      dueMember({
+        campaign_member_id: `cm-consumer-${i}`,
+        contact_id: `contact-consumer-${i}`,
+        current_step: 0,
+        next_step: 1,
+        email: `booker${i}@${domain}`,
+        recipient_domain: domain,
+      }),
+    );
+
+    const supabase = mockSupabase(
+      {
+        app_settings: [{ key: "round_robin_cursor", value: -1 }],
+        connected_accounts: [{ ...account("acc-a"), ramp_schedule: HIGH_RAMP }],
+        send_counters: [],
+        outbound_sends: [],
+      },
+      { send_engine_who_is_due: [...university, ...consumer] },
+    );
+
+    const result = await runSendTick(supabase, { dryRun: true, ignoreSendWindow: true });
+
+    // 1 university + all 5 consumer addresses (including both gmail.com).
+    expect(result.sent).toBe(6);
+    expect(result.skippedDomainCap).toBe(4);
   });
 
   it("still stops at DEFAULT_BATCH_LIMIT real sends even with a much larger candidate pool available", async () => {

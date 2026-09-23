@@ -51,6 +51,81 @@ const DEFAULT_BATCH_LIMIT = 20;
 // the actual real-send pacing limit itself.
 const CANDIDATE_FETCH_LIMIT = 500;
 
+// The one-send-per-domain-per-tick rule below exists to avoid dropping a
+// burst of mail on a single ORGANISATION's mail server -- ten people at
+// duke.edu all receiving outreach within the same minute is both a
+// deliverability risk and plainly rude. That reasoning does not transfer
+// to the big consumer mailbox providers: 463 gmail.com recipients are 463
+// unrelated individuals who happen to use Google, not one institution
+// being hammered. Google throttles on the SENDER's reputation and volume,
+// which the per-account ramp caps already govern, and its bulk-sender
+// thresholds start at 5,000/day -- far above anything here.
+//
+// Treating gmail.com as a single capped "domain" was therefore pure loss,
+// and the cost was severe rather than theoretical. Confirmed live
+// 2026-09-23: all 149 contacts then due were gmail.com addresses (the
+// Canadian presenter/festival lists and Classical Pitch are heavily
+// personal-address), so every 5-minute tick sent exactly ONE mail and
+// skipped the other 148 -- a ceiling of ~108 sends/day against a
+// configured capacity of 1,350. The CANDIDATE_FETCH_LIMIT workaround
+// above cannot help here: it widens the search for distinct-domain
+// candidates, but when the entire queue is one domain there are none to
+// find.
+//
+// Exempting these providers leaves the rule doing exactly the job it was
+// written for, on the domains it was written for. Per-tick volume stays
+// bounded by DEFAULT_BATCH_LIMIT and per-day volume by the ramp caps, so
+// nothing here raises total throughput above what was already configured
+// -- it only stops that capacity being thrown away.
+const CONSUMER_MAILBOX_DOMAINS = new Set([
+  "gmail.com",
+  "googlemail.com",
+  "yahoo.com",
+  "yahoo.ca",
+  "yahoo.co.uk",
+  "ymail.com",
+  "hotmail.com",
+  "hotmail.ca",
+  "hotmail.co.uk",
+  "outlook.com",
+  "live.com",
+  "live.ca",
+  "msn.com",
+  "aol.com",
+  "icloud.com",
+  "me.com",
+  "mac.com",
+  "comcast.net",
+  "verizon.net",
+  "sbcglobal.net",
+  "att.net",
+  "bellsouth.net",
+  "cox.net",
+  "earthlink.net",
+  "juno.com",
+  "protonmail.com",
+  "proton.me",
+  "gmx.com",
+  "gmx.de",
+  "mail.com",
+  "zoho.com",
+  "yandex.com",
+  "web.de",
+  "sympatico.ca",
+  "shaw.ca",
+  "telus.net",
+  "rogers.com",
+  "bell.net",
+  "videotron.ca",
+  "cogeco.ca",
+  "btinternet.com",
+  "orange.fr",
+  "wanadoo.fr",
+  "free.fr",
+  "libero.it",
+  "bigpond.com",
+]);
+
 // Confirmed live, 2026-09-16: a tick ran long enough to hit cron-job.org's
 // hard 30s kill (see DEFAULT_BATCH_LIMIT above for why that, not Vercel's
 // own 60s maxDuration, is the real ceiling) while holding the send lock --
@@ -234,7 +309,12 @@ export async function runSendTick(
 
       result.attempted++;
 
-      if (domainsSentThisTick.has(member.recipient_domain)) {
+      // Consumer mailbox providers are exempt -- see
+      // CONSUMER_MAILBOX_DOMAINS above for why the one-per-tick rule
+      // protects nothing on gmail.com and costs most of the day's capacity.
+      const capsApplyToDomain = !CONSUMER_MAILBOX_DOMAINS.has(member.recipient_domain);
+
+      if (capsApplyToDomain && domainsSentThisTick.has(member.recipient_domain)) {
         result.skippedDomainCap++;
         result.details.push({ email: member.email, outcome: "skipped: domain already sent this tick" });
         continue;
@@ -315,7 +395,7 @@ export async function runSendTick(
       if (opts.dryRun) {
         cursor = picked.nextCursor;
         sentCounts.set(picked.account.id, (sentCounts.get(picked.account.id) ?? 0) + 1);
-        domainsSentThisTick.add(member.recipient_domain);
+        if (capsApplyToDomain) domainsSentThisTick.add(member.recipient_domain);
         result.sent++;
         result.details.push({ email: member.email, outcome: "would send", account: picked.account.email_address });
         continue;
@@ -410,7 +490,7 @@ export async function runSendTick(
         sentCounts.set(picked.account.id, newCount ?? (sentCounts.get(picked.account.id) ?? 0) + 1);
 
         cursor = picked.nextCursor;
-        domainsSentThisTick.add(member.recipient_domain);
+        if (capsApplyToDomain) domainsSentThisTick.add(member.recipient_domain);
         result.sent++;
         result.details.push({ email: member.email, outcome: "sent", account: picked.account.email_address });
       } catch (err) {

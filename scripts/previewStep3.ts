@@ -12,15 +12,17 @@ import { resolveTemplate, findUnresolvedTokens } from "../src/lib/templates/reso
 const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
 const CAMPAIGN = "US Venues Roster Announce";
 
-async function pageAll<T>(table: string, select: string, f: (q: never) => unknown): Promise<T[]> {
+/* eslint-disable @typescript-eslint/no-explicit-any -- supabase-js builder
+   types do not survive being threaded through a generic paging helper. */
+type Q = any;
+
+async function pageAll<T>(table: string, select: string, f: (q: Q) => Q): Promise<T[]> {
   const out: T[] = [];
   const size = 1000;
   for (let from = 0; ; from += size) {
-    const q = f(supabase.from(table).select(select).range(from, from + size - 1) as never) as {
-      data: T[] | null;
-      error: { message: string } | null;
-    };
-    const { data, error } = await q;
+    const { data, error } = (await f(
+      supabase.from(table).select(select).order("id", { ascending: true }).range(from, from + size - 1),
+    )) as { data: T[] | null; error: { message: string } | null };
     if (error) throw new Error(error.message);
     const rows = data ?? [];
     out.push(...rows);
@@ -45,9 +47,17 @@ async function main() {
   }
   const bodyFor = new Map((templates as { variant: string; body: string }[]).map((t) => [t.variant, t.body]));
 
-  // Everyone who will still be in the sequence when step 3 comes due.
+  // Only ACTIVE members reach step 3 -- paused and completed rows are
+  // excluded by send_engine_who_is_due, so counting them here would
+  // overstate every bucket.
+  //
+  // Ordered explicitly: .range() paginates by position, and without a
+  // stable sort postgres may return rows in a different order per page,
+  // so the same row can be fetched twice and another missed. That showed
+  // up as the total drifting between runs (3746 / 3743 / 3728) before
+  // the order was pinned.
   const members = await pageAll<{ contact_id: string }>("campaign_members", "contact_id", (q) =>
-    (q as never as { eq: (a: string, b: unknown) => unknown }).eq("campaign_id", campaignId),
+    q.eq("campaign_id", campaignId).eq("member_status", "active"),
   );
   const activeIds = [...new Set(members.map((m) => m.contact_id))];
 

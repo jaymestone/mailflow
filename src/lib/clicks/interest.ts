@@ -71,30 +71,41 @@ export async function resolveInterest(
   }
   if (contactIds.length === 0) return result;
 
-  // Joined through link_tokens so the campaign and contact filters happen
-  // in the database; fetching every click and intersecting in JS would
-  // pull tens of thousands of rows to use a few hundred.
-  const { data, error } = await supabase
-    .from("link_clicks")
-    .select("clicked_at, link_tokens!inner(contact_id, label, destination_url)")
-    .eq("click_class", "human")
-    .eq("link_tokens.campaign_id", campaignId)
-    .in("link_tokens.contact_id", contactIds);
-
-  // A failure here must not silently downgrade everyone to "no_click" and
-  // send the wrong email to a genuinely interested venue -- the caller
-  // decides what to do, but it has to know.
-  if (error) throw new Error(`resolveInterest: ${error.message}`);
-
+  // PostgREST puts .in() lists in the query STRING, so a long one produces
+  // a URL the server rejects outright -- it surfaces as an opaque "fetch
+  // failed", not as a useful error. Caught by running the preview over a
+  // whole campaign (4,058 contacts); the send tick would have hit it too,
+  // since CANDIDATE_FETCH_LIMIT lets up to 500 ids through and ~500 UUIDs
+  // is already past the practical URL ceiling. 200 keeps each request far
+  // inside it. The same payload-size trap is noted on the campaign page.
+  const CHUNK = 200;
   const firstClickByContact = new Map<string, Map<string, string>>();
-  for (const row of (data ?? []) as unknown as ClickRow[]) {
-    const token = row.link_tokens;
-    if (!token?.contact_id || !ARTIST_URL.test(token.destination_url)) continue;
 
-    if (!firstClickByContact.has(token.contact_id)) firstClickByContact.set(token.contact_id, new Map());
-    const perArtist = firstClickByContact.get(token.contact_id)!;
-    const existing = perArtist.get(token.label);
-    if (!existing || row.clicked_at < existing) perArtist.set(token.label, row.clicked_at);
+  for (let i = 0; i < contactIds.length; i += CHUNK) {
+    // Joined through link_tokens so the campaign and contact filters happen
+    // in the database; fetching every click and intersecting in JS would
+    // pull tens of thousands of rows to use a few hundred.
+    const { data, error } = await supabase
+      .from("link_clicks")
+      .select("clicked_at, link_tokens!inner(contact_id, label, destination_url)")
+      .eq("click_class", "human")
+      .eq("link_tokens.campaign_id", campaignId)
+      .in("link_tokens.contact_id", contactIds.slice(i, i + CHUNK));
+
+    // A failure here must not silently downgrade everyone to "no_click"
+    // and send the wrong email to a genuinely interested venue -- the
+    // caller decides what to do, but it has to know.
+    if (error) throw new Error(`resolveInterest: ${error.message}`);
+
+    for (const row of (data ?? []) as unknown as ClickRow[]) {
+      const token = row.link_tokens;
+      if (!token?.contact_id || !ARTIST_URL.test(token.destination_url)) continue;
+
+      if (!firstClickByContact.has(token.contact_id)) firstClickByContact.set(token.contact_id, new Map());
+      const perArtist = firstClickByContact.get(token.contact_id)!;
+      const existing = perArtist.get(token.label);
+      if (!existing || row.clicked_at < existing) perArtist.set(token.label, row.clicked_at);
+    }
   }
 
   for (const [contactId, perArtist] of firstClickByContact) {

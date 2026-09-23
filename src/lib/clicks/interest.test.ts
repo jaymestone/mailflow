@@ -22,14 +22,25 @@ describe("displayArtistName", () => {
   });
 });
 
-/** Minimal stand-in for the one chained query resolveInterest makes. */
+/** Minimal stand-in for the chained query resolveInterest makes. Records
+ * the id lists it was asked for, so chunking can be asserted. */
 function mockSupabase(rows: unknown[], error: { message: string } | null = null) {
+  const calls: string[][] = [];
   const builder = {
     select: () => builder,
     eq: () => builder,
-    in: () => Promise.resolve({ data: rows, error }),
+    in: (_col: string, ids: string[]) => {
+      calls.push(ids);
+      // Only return rows belonging to the ids this chunk asked for, the
+      // way the real query would.
+      const wanted = new Set(ids);
+      const mine = (rows as { link_tokens?: { contact_id?: string } }[]).filter(
+        (r) => r.link_tokens?.contact_id && wanted.has(r.link_tokens.contact_id),
+      );
+      return Promise.resolve({ data: mine, error });
+    },
   };
-  return { from: () => builder } as never;
+  return Object.assign({ from: () => builder } as never, { __calls: calls }) as never & { __calls: string[][] };
 }
 
 const ARTIST = (slug: string) => `https://www.jaymestone.com/agency/${slug}`;
@@ -127,6 +138,33 @@ describe("resolveInterest", () => {
     await expect(resolveInterest(mockSupabase([], { message: "timeout" }), "camp-1", ["c1"])).rejects.toThrow(
       /timeout/,
     );
+  });
+
+  it("chunks the id list so a whole campaign does not blow the URL length", async () => {
+    // PostgREST puts .in() lists in the query string; one request for
+    // thousands of UUIDs fails as an opaque "fetch failed". Found by
+    // running the preview over all 4,058 contacts of a real campaign.
+    const ids = Array.from({ length: 450 }, (_, i) => `contact-${i}`);
+    const supabase = mockSupabase([]);
+
+    await resolveInterest(supabase, "camp-1", ids);
+
+    const calls = (supabase as unknown as { __calls: string[][] }).__calls;
+    expect(calls.length).toBeGreaterThan(1);
+    expect(Math.max(...calls.map((c) => c.length))).toBeLessThanOrEqual(200);
+    expect(calls.flat()).toHaveLength(450);
+  });
+
+  it("still finds clicks for contacts in a later chunk", async () => {
+    const ids = Array.from({ length: 250 }, (_, i) => `contact-${i}`);
+    const supabase = mockSupabase([
+      click("contact-240", "RAKISH", ARTIST("rakish"), "2026-09-10T10:00:00Z"),
+    ]);
+
+    const result = await resolveInterest(supabase, "camp-1", ids);
+
+    expect(result.get("contact-240")).toMatchObject({ bucket: "clicked_focused", artists: ["Rakish"] });
+    expect(result.get("contact-0")?.bucket).toBe("no_click");
   });
 
   it("makes no query at all when there are no contacts to resolve", async () => {

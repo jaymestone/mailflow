@@ -2,6 +2,9 @@ export type MergeContact = {
   first_name?: string | null;
   last_name?: string | null;
   venue?: string | null;
+  /** Short conversational form of the venue name, when the catalogue name
+   * doesn't read well in a sentence. See migration 32. */
+  venue_short?: string | null;
   city?: string | null;
   state?: string | null;
   venue_type?: string | null;
@@ -10,7 +13,12 @@ export type MergeContact = {
 const MERGE_FIELDS: Record<string, (c: MergeContact) => string> = {
   "first name": (c) => c.first_name?.trim() || "there",
   "last name": (c) => c.last_name?.trim() || "",
-  venue: (c) => c.venue?.trim() || "your venue",
+  // venue_short wins when set. Deliberately the SAME token rather than a
+  // separate {{Venue Short}}: every existing template and campaign then
+  // benefits without being edited, and there is no way to author copy that
+  // accidentally uses the unreadable form. venue remains the fallback, so
+  // the ~98% of names that already read naturally need no short form at all.
+  venue: (c) => c.venue_short?.trim() || c.venue?.trim() || "your venue",
   city: (c) => c.city?.trim() || "",
   state: (c) => c.state?.trim() || "",
   "venue type": (c) => c.venue_type?.trim() || "",

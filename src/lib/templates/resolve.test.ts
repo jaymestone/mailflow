@@ -19,6 +19,24 @@ describe("resolveMergeFields", () => {
     expect(resolveMergeFields("{{Last Name}}", {})).toBe("");
   });
 
+  it("prefers venue_short over venue, so catalogue names never reach the copy", () => {
+    // The real case this exists for: a name that is correct in the list
+    // and unsayable in a sentence.
+    const contact = { venue: "World Music/CRASHarts", venue_short: "CRASHarts" };
+    expect(resolveMergeFields("good for {{Venue}}", contact)).toBe("good for CRASHarts");
+  });
+
+  it("falls back to venue when no short form is set", () => {
+    // ~98% of names read fine as-is and are meant to need no attention.
+    expect(resolveMergeFields("{{Venue}}", { venue: "The Fillmore" })).toBe("The Fillmore");
+    expect(resolveMergeFields("{{Venue}}", { venue: "The Fillmore", venue_short: "  " })).toBe("The Fillmore");
+    expect(resolveMergeFields("{{Venue}}", { venue: "The Fillmore", venue_short: null })).toBe("The Fillmore");
+  });
+
+  it("still reaches the generic default when neither form is set", () => {
+    expect(resolveMergeFields("{{Venue}}", { venue: null, venue_short: null })).toBe("your venue");
+  });
+
   it("leaves an unknown field name untouched", () => {
     expect(resolveMergeFields("{{Not A Field}}", {})).toBe("{{Not A Field}}");
   });

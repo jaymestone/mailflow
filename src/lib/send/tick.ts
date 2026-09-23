@@ -150,6 +150,7 @@ type DueMember = {
   first_name: string | null;
   last_name: string | null;
   venue: string | null;
+  venue_short: string | null;
   city: string | null;
   state: string | null;
   venue_type: string | null;

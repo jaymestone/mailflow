@@ -4,7 +4,12 @@ import { findUnresolvedTokens, resolveTemplate } from "@/lib/templates/resolve";
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const { step_number, days_after_previous, test_delay_minutes, subject, body } = await request.json();
+  const { step_number, days_after_previous, test_delay_minutes, subject, body, variant } = await request.json();
+
+  // Steps without alternatives are the 'default' variant. Kept implicit so
+  // every existing caller (and every campaign that will never use
+  // variants) carries on working untouched.
+  const variantName: string = typeof variant === "string" && variant.trim() ? variant.trim() : "default";
 
   // Step 1 has no prior step to derive a subject from, so it's required.
   // Later steps can leave it blank — the send engine fills in
@@ -18,7 +23,19 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 
   // Sanity-check against a dummy contact so obviously broken templates
   // (unknown merge fields, malformed spintext) are rejected up front.
-  const dummy = { first_name: "Test", last_name: "Contact", venue: "Test Venue", city: "Test City", state: "TS" };
+  // clicked_artists is supplied because {{Clicked Artists}} deliberately
+  // has no fallback -- it stays unresolved when a contact has no genuine
+  // clicks, which is what makes the send engine skip them rather than
+  // send a sentence with a hole in it. Without a value here, saving the
+  // clicked_focused body would be rejected as a broken template.
+  const dummy = {
+    first_name: "Test",
+    last_name: "Contact",
+    venue: "Test Venue",
+    city: "Test City",
+    state: "TS",
+    clicked_artists: ["Summer Camargo", "Rakish"],
+  };
   const resolvedSubject = resolveTemplate(subject ?? "", dummy);
   const resolvedBody = resolveTemplate(body, dummy);
   const unresolved = [...findUnresolvedTokens(resolvedSubject), ...findUnresolvedTokens(resolvedBody)];
@@ -34,6 +51,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     {
       campaign_id: id,
       step_number,
+      variant: variantName,
       days_after_previous: days_after_previous ?? 0,
       // Testing-only cadence override — overrides days_after_previous when
       // set, cleared (set to null) whenever the request omits it.
@@ -41,7 +59,12 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       subject: (subject ?? "").trim(),
       body: body.trim(),
     },
-    { onConflict: "campaign_id,step_number" },
+    // Must match the unique constraint as it actually exists. Migration 33
+    // widened it from (campaign_id, step_number) to include variant, and
+    // leaving this behind broke saving EVERY template in EVERY campaign --
+    // postgres rejects an ON CONFLICT clause that names no real
+    // constraint, so the error was total rather than subtle.
+    { onConflict: "campaign_id,step_number,variant" },
   );
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
@@ -50,14 +73,15 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 
 export async function DELETE(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const { step_number } = await request.json();
+  const { step_number, variant } = await request.json();
 
   const supabase = await createClient();
-  const { error } = await supabase
-    .from("campaign_templates")
-    .delete()
-    .eq("campaign_id", id)
-    .eq("step_number", step_number);
+  // With no variant named, this deletes the whole step -- every variant of
+  // it -- which is what "delete step 3" means from the campaign screen.
+  // Naming one deletes only that alternative and leaves the step standing.
+  let query = supabase.from("campaign_templates").delete().eq("campaign_id", id).eq("step_number", step_number);
+  if (typeof variant === "string" && variant.trim()) query = query.eq("variant", variant.trim());
+  const { error } = await query;
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ ok: true });

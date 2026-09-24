@@ -17,11 +17,35 @@ import {
 
 type Template = {
   step_number: number;
+  /** Which audience this body is for. "default" is the ordinary case --
+   * the body everyone gets on a step with no alternatives. Step 3 of the
+   * roster campaigns also has clicked_focused / clicked_broad / no_click,
+   * picked per contact from their own click history. */
+  variant?: string | null;
   days_after_previous: number;
   test_delay_minutes: number | null;
   subject: string;
   body: string;
 };
+
+/** Plain-language labels for the audience each variant targets. Without
+ * these the campaign screen shows several identical "Step 3" blocks with
+ * nothing to say which is which -- which is exactly how Jayme found it. */
+const VARIANT_LABELS: Record<string, { name: string; who: string }> = {
+  default: { name: "Everyone", who: "sent when a step has no alternatives, and as the fallback if one is missing" },
+  clicked_focused: { name: "Clicked 1–3 artists", who: "names the artists they actually opened, via {{Clicked Artists}}" },
+  clicked_broad: { name: "Clicked 4+ artists", who: "read most of the roster — offers to narrow it down, names nobody" },
+  no_click: { name: "No genuine clicks", who: "last note, and asks whether we have the right person" },
+};
+
+function variantLabel(variant: string | null | undefined) {
+  return VARIANT_LABELS[variant ?? "default"] ?? { name: variant ?? "default", who: "" };
+}
+
+/** One row per step in the DB, so a step's identity is step + variant. */
+function templateKey(t: Template): string {
+  return `${t.step_number}|${t.variant ?? "default"}`;
+}
 
 const MINUTES_PER_UNIT = { minutes: 1, hours: 60, days: 1440 } as const;
 type DelayUnit = keyof typeof MINUTES_PER_UNIT;
@@ -51,24 +75,35 @@ export function TemplateEditor({
   savedTemplates: SavedTemplate[];
 }) {
   const router = useRouter();
-  const [editingStep, setEditingStep] = useState<number | null>(null);
+  // Keyed by step AND variant -- a step can have several bodies, so a
+  // bare step number no longer identifies which one is open.
+  const [editingStep, setEditingStep] = useState<string | null>(null);
 
   const nextStepNumber = templates.length > 0 ? Math.max(...templates.map((t) => t.step_number)) + 1 : 1;
-  const firstStepTemplate = templates.find((t) => t.step_number === 1);
+  // Only the default body of step 1 -- a variant's subject is never the
+  // one later steps thread under.
+  const firstStepTemplate = templates.find((t) => t.step_number === 1 && (t.variant ?? "default") === "default");
 
   return (
     <div className="mt-5 flex flex-col gap-3.5">
       {templates
-        .sort((a, b) => a.step_number - b.step_number)
+        .sort(
+          (a, b) =>
+            a.step_number - b.step_number ||
+            // Default first, then the audiences in the order the sequence
+            // reaches them: most engaged to least.
+            ["default", "clicked_focused", "clicked_broad", "no_click"].indexOf(a.variant ?? "default") -
+              ["default", "clicked_focused", "clicked_broad", "no_click"].indexOf(b.variant ?? "default"),
+        )
         .map((t) => (
           <StepForm
-            key={t.step_number}
+            key={templateKey(t)}
             campaignId={campaignId}
             template={t}
             savedTemplates={savedTemplates}
             firstStepTemplate={firstStepTemplate}
-            isEditing={editingStep === t.step_number}
-            onEdit={() => setEditingStep(t.step_number)}
+            isEditing={editingStep === templateKey(t)}
+            onEdit={() => setEditingStep(templateKey(t))}
             onDone={() => {
               setEditingStep(null);
               router.refresh();
@@ -76,11 +111,12 @@ export function TemplateEditor({
           />
         ))}
 
-      {editingStep === nextStepNumber ? (
+      {editingStep === String(nextStepNumber) ? (
         <StepForm
           campaignId={campaignId}
           template={{
             step_number: nextStepNumber,
+            variant: "default",
             days_after_previous: nextStepNumber === 1 ? 0 : 5,
             test_delay_minutes: null,
             subject: "",
@@ -98,7 +134,7 @@ export function TemplateEditor({
         />
       ) : (
         <button
-          onClick={() => setEditingStep(nextStepNumber)}
+          onClick={() => setEditingStep(String(nextStepNumber))}
           className="self-start rounded-[2px] border border-dashed border-rule px-3.5 py-2 text-xs text-muted-3 hover:border-accent hover:text-accent"
         >
           + Add step {nextStepNumber}
@@ -275,6 +311,7 @@ function StepForm({
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         step_number: template.step_number,
+        variant: template.variant ?? "default",
         days_after_previous: daysAfter,
         test_delay_minutes: testDelayEnabled
           ? Math.max(0, Math.round((parseFloat(testDelayAmount) || 0) * MINUTES_PER_UNIT[testDelayUnit]))
@@ -293,11 +330,16 @@ function StepForm({
   }
 
   async function remove() {
-    if (!confirm(`Delete step ${template.step_number}?`)) return;
+    const v = template.variant ?? "default";
+    const what =
+      v === "default"
+        ? `Delete step ${template.step_number}?`
+        : `Delete the "${variantLabel(v).name}" version of step ${template.step_number}? The other versions stay.`;
+    if (!confirm(what)) return;
     await fetch(`/api/campaigns/${campaignId}/templates`, {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ step_number: template.step_number }),
+      body: JSON.stringify({ step_number: template.step_number, variant: template.variant ?? "default" }),
     });
     router.refresh();
   }
@@ -361,6 +403,14 @@ function StepForm({
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2.5">
               <span className="text-sm font-semibold text-ink">{effectiveSubject}</span>
+              {/* Without this the campaign screen shows several identical
+                  "Step 3" blocks and nothing says which audience each is
+                  for -- the question Jayme asked on seeing it. */}
+              {(template.variant ?? "default") !== "default" && (
+                <span className="rounded-full bg-accent/12 px-2 py-0.5 text-[11px] font-medium text-accent">
+                  {variantLabel(template.variant).name}
+                </span>
+              )}
               {template.step_number > 1 && template.test_delay_minutes != null ? (
                 <span className="rounded-full bg-warning/15 px-2 py-0.5 text-[11px] font-medium text-warning">
                   ⚠ TEST: {formatMinutes(template.test_delay_minutes)} after previous
@@ -384,6 +434,11 @@ function StepForm({
             className="mt-1.5 whitespace-pre-wrap text-[13px] text-muted [&_a]:text-accent [&_a]:underline"
             dangerouslySetInnerHTML={{ __html: effectiveBodyHtml }}
           />
+          {(template.variant ?? "default") !== "default" && (
+            <p className="mt-1 text-[11px] text-accent/80">
+              Sent only to contacts who {variantLabel(template.variant).who}
+            </p>
+          )}
           {template.step_number > 1 && (
             <p className="mt-1 text-[11px] text-faint-3">Sent as a reply, with step 1&apos;s original email quoted below.</p>
           )}
@@ -396,6 +451,9 @@ function StepForm({
     <div className="rounded-[2px] border border-hairline-strong bg-surface p-5">
       <div className="text-sm font-semibold text-ink">
         {isNew ? `New step ${template.step_number}` : `Editing step ${template.step_number}`}
+        {(template.variant ?? "default") !== "default" && (
+          <span className="ml-2 font-normal text-accent">— {variantLabel(template.variant).name}</span>
+        )}
       </div>
 
       {template.step_number > 1 && (

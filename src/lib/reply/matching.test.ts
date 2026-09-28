@@ -85,6 +85,7 @@ describe("matchInboundMessage", () => {
       contactId: "contact-1",
       outboundSendId: "send-1",
       matchMethod: "message_id",
+      alsoImplicatedContactIds: [],
     });
   });
 
@@ -122,6 +123,7 @@ describe("matchInboundMessage", () => {
       contactId: "contact-3",
       outboundSendId: "send-3",
       matchMethod: "tracking_token",
+      alsoImplicatedContactIds: [],
     });
   });
 
@@ -152,6 +154,7 @@ describe("matchInboundMessage", () => {
       contactId: "contact-5",
       outboundSendId: null,
       matchMethod: "sender_email",
+      alsoImplicatedContactIds: [],
     });
   });
 
@@ -185,6 +188,7 @@ describe("matchInboundMessage", () => {
       contactId: "contact-7",
       outboundSendId: null,
       matchMethod: "sender_email",
+      alsoImplicatedContactIds: [],
     });
   });
 
@@ -226,6 +230,180 @@ describe("matchInboundMessage", () => {
       contactId: null,
       outboundSendId: null,
       matchMethod: "unmatched",
+      alsoImplicatedContactIds: [],
     });
+  });
+});
+
+// The live failure of 2026-09-28. We mailed monag@pricechopper.com
+// (contact "Second Wind Productions"); pricechopper.com forwards, so Mona
+// replied from mgolub@northeastsharedservices.com, which the list held as
+// a SEPARATE contact record for the same person. The forwarder also
+// rewrote the threading headers, so tiers 1 and 2 found nothing and the
+// sender fallback credited the reply to the record that was never mailed.
+// The mailed record kept going and sent a second cold pitch 12 days after
+// she replied "interested".
+const FORWARDED_REPLY = `Jayme,
+
+I retired Second Wind Productions in 2004 to concentrate on Music Haven.
+
+Thanks,
+MJG
+
+From: Jayme Stone <agency@jaymestone.com>
+Sent: Wednesday, September 16, 2026 9:25 AM
+To: monag@pricechopper.com
+Subject: New Roster X Second Wind Productions`;
+
+/** Both records exist, both are active members, no header matches. */
+function splitRecordDb(): SupabaseClient {
+  return mockSupabase((table, filters) => {
+    if (table === "contacts") {
+      if (filters.email === "mgolub@northeastsharedservices.com")
+        return { id: "contact-music-haven", email: "mgolub@northeastsharedservices.com" };
+      if (filters.email === "monag@pricechopper.com")
+        return { id: "contact-second-wind", email: "monag@pricechopper.com" };
+      return null;
+    }
+    if (table === "campaign_members" && filters.member_status === "active") {
+      return { campaign_id: "camp-roster", contact_id: filters.contact_id };
+    }
+    return null; // no rfc_message_id / tracking_token ever matches
+  });
+}
+
+describe("matchInboundMessage — one human under two contact records", () => {
+  it("credits the record that was actually mailed, not the one that replied", async () => {
+    const result = await matchInboundMessage(
+      splitRecordDb(),
+      email({
+        fromEmail: "mgolub@northeastsharedservices.com",
+        bodyText: FORWARDED_REPLY,
+        inReplyTo: "<CAKzgW0s@mail.gmail.com>",
+      }),
+    );
+
+    expect(result.matchMethod).toBe("quoted_recipient");
+    expect(result.contactId).toBe("contact-second-wind");
+  });
+
+  it("also reports the replying record, so its sequence can be stopped too", async () => {
+    const result = await matchInboundMessage(
+      splitRecordDb(),
+      email({
+        fromEmail: "mgolub@northeastsharedservices.com",
+        bodyText: FORWARDED_REPLY,
+      }),
+    );
+
+    expect(result.alsoImplicatedContactIds).toEqual(["contact-music-haven"]);
+  });
+
+  it("reports the second record even when the headers DID match", async () => {
+    // Tier 1 resolves the mailed record correctly, but the duplicate is
+    // still sitting there active and still needs stopping.
+    const supabase = mockSupabase((table, filters) => {
+      if (table === "outbound_sends" && filters.rfc_message_id === "<ours@jaymestoneagency.com>") {
+        return { id: "send-1", campaign_id: "camp-roster", contact_id: "contact-second-wind" };
+      }
+      if (table === "contacts" && filters.email === "mgolub@northeastsharedservices.com") {
+        return { id: "contact-music-haven", email: "mgolub@northeastsharedservices.com" };
+      }
+      if (table === "contacts" && filters.email === "monag@pricechopper.com") {
+        return { id: "contact-second-wind", email: "monag@pricechopper.com" };
+      }
+      if (table === "campaign_members" && filters.member_status === "active") {
+        return { campaign_id: "camp-roster", contact_id: filters.contact_id };
+      }
+      return null;
+    });
+
+    const result = await matchInboundMessage(
+      supabase,
+      email({
+        fromEmail: "mgolub@northeastsharedservices.com",
+        bodyText: FORWARDED_REPLY,
+        inReplyTo: "<ours@jaymestoneagency.com>",
+      }),
+    );
+
+    expect(result.matchMethod).toBe("message_id");
+    expect(result.contactId).toBe("contact-second-wind");
+    expect(result.alsoImplicatedContactIds).toEqual(["contact-music-haven"]);
+  });
+
+  it("stays on sender_email when the quoted recipient is the same contact", async () => {
+    // The ordinary case: no forwarding, the address we mailed is the
+    // address that replied. Nothing about tier 3 should change.
+    const supabase = mockSupabase((table, filters) => {
+      if (table === "contacts" && filters.email === "venue@example.com") {
+        return { id: "contact-7", email: "venue@example.com" };
+      }
+      if (table === "campaign_members" && filters.member_status === "active") {
+        return { campaign_id: "camp-7", contact_id: "contact-7" };
+      }
+      return null;
+    });
+
+    const result = await matchInboundMessage(
+      supabase,
+      email({
+        fromEmail: "venue@example.com",
+        bodyText: "Sure.\n\nFrom: Jayme\nTo: venue@example.com\nSubject: x",
+      }),
+    );
+
+    expect(result.matchMethod).toBe("sender_email");
+    expect(result.contactId).toBe("contact-7");
+    expect(result.alsoImplicatedContactIds).toEqual([]);
+  });
+
+  it("ignores a quoted recipient that is not a contact we hold", async () => {
+    // A cc'd colleague in the quoted headers must not hijack attribution.
+    const supabase = mockSupabase((table, filters) => {
+      if (table === "contacts" && filters.email === "venue@example.com") {
+        return { id: "contact-7", email: "venue@example.com" };
+      }
+      if (table === "campaign_members" && filters.member_status === "active") {
+        return { campaign_id: "camp-7", contact_id: "contact-7" };
+      }
+      return null;
+    });
+
+    const result = await matchInboundMessage(
+      supabase,
+      email({
+        fromEmail: "venue@example.com",
+        bodyText: "Sure.\n\nFrom: Jayme\nTo: stranger@nowhere.org\nSubject: x",
+      }),
+    );
+
+    expect(result.matchMethod).toBe("sender_email");
+    expect(result.contactId).toBe("contact-7");
+  });
+
+  it("does not implicate a duplicate that has no active membership", async () => {
+    // Already paused or already replied — nothing to stop, so it must not
+    // be reported and the caller does not have to re-check.
+    const supabase = mockSupabase((table, filters) => {
+      if (table === "outbound_sends" && filters.rfc_message_id === "<ours@jaymestoneagency.com>") {
+        return { id: "send-1", campaign_id: "camp-roster", contact_id: "contact-second-wind" };
+      }
+      if (table === "contacts" && filters.email === "mgolub@northeastsharedservices.com") {
+        return { id: "contact-music-haven", email: "mgolub@northeastsharedservices.com" };
+      }
+      return null; // no active membership for anyone
+    });
+
+    const result = await matchInboundMessage(
+      supabase,
+      email({
+        fromEmail: "mgolub@northeastsharedservices.com",
+        bodyText: FORWARDED_REPLY,
+        inReplyTo: "<ours@jaymestoneagency.com>",
+      }),
+    );
+
+    expect(result.alsoImplicatedContactIds).toEqual([]);
   });
 });

@@ -1,0 +1,19 @@
+-- A reply does not have to arrive from the address we mailed.
+--
+-- Forwarders, shared mailboxes and org domain migrations all break that
+-- assumption. When the list happens to hold BOTH addresses as separate
+-- contact records -- the same human, imported from two sources -- the
+-- reply gets credited to whichever record owns the From address, which
+-- need not be the record the thread was sent to.
+--
+-- send_engine_who_is_due gates on matched_contact_id, so the record that
+-- was actually mailed never registers a reply and keeps stepping through
+-- the sequence. Confirmed live 2026-09-28: a venue replied "interested"
+-- on 09-16 from a forwarded-to address held under a second record, and
+-- the mailed record sent her a further cold pitch on 09-28.
+--
+-- matching.ts now reads the quoted original's To: header to recover the
+-- address that was actually mailed, and prefers it over the sender when
+-- the two disagree. This records that as its own match method so the two
+-- cases stay distinguishable in the data.
+alter type inbound_match_method add value if not exists 'quoted_recipient';

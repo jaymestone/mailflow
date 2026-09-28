@@ -73,6 +73,10 @@ export type ReplyTickResult = {
   /** Successors read straight out of a departure reply and filed for
    * approval — see harvestReferralFromReply. Costs nothing per hit. */
   referralsHarvested: number;
+  /** Contacts paused because a reply turned out to cover them under a
+   * second record — see match.alsoImplicatedContactIds. A non-zero count
+   * means the list holds duplicates worth merging by hand. */
+  splitRecordsPaused: number;
   errors: { account: string; error: string }[];
   // Populated whenever an account's history checkpoint turned out to be
   // unusable (see wasReset in gmail/history.ts) and a direct-search
@@ -328,6 +332,28 @@ export async function processOneMessage(
       })
       .select("id")
       .single();
+
+    // One human, two contact records: the reply answers a thread sent to
+    // one of them and arrives from the other's address, so only one gets
+    // credited. send_engine_who_is_due gates on matched_contact_id, which
+    // leaves the uncredited record cheerfully sending to someone who has
+    // already replied — live case in quotedRecipient.ts, where that cost a
+    // second cold pitch to a venue twelve days after she said yes.
+    //
+    // Pausing rather than deleting: the duplicate is still a real record
+    // that a human may want to merge deliberately, and pausing is visible
+    // in the UI and reversible. Runs for every category, since "stop
+    // mailing the other copy of this person" is true of any reply.
+    for (const alsoId of match.alsoImplicatedContactIds ?? []) {
+      const { data: pausedSplit } = await supabase
+        .from("campaign_members")
+        .update({ member_status: "paused" })
+        .eq("contact_id", alsoId)
+        .eq("member_status", "active")
+        .select("id");
+      result.pausedElsewhere += pausedSplit?.length ?? 0;
+      result.splitRecordsPaused += pausedSplit?.length ? 1 : 0;
+    }
 
     // A bounce only suppresses/deletes when it's confirmed hard (see
     // bounceDetection.ts) — a soft bounce (mailbox full, greylisted,
@@ -593,6 +619,7 @@ export async function runReplyPollTick(supabase: SupabaseClient): Promise<ReplyT
     pausedElsewhere: 0,
     removedForReplacement: 0,
     referralsHarvested: 0,
+    splitRecordsPaused: 0,
     errors: [],
     historyResets: [],
   };

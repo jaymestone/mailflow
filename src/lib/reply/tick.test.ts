@@ -17,7 +17,7 @@ vi.mock("./classify", () => ({
   classifyReply: vi.fn(async () => ({ category: "interested", oooReturnDate: null })),
 }));
 vi.mock("./matching", () => ({
-  matchInboundMessage: vi.fn(async () => ({ campaignId: null, contactId: null, outboundSendId: null, matchMethod: "unmatched" })),
+  matchInboundMessage: vi.fn(async () => ({ campaignId: null, contactId: null, outboundSendId: null, matchMethod: "unmatched", alsoImplicatedContactIds: [] })),
 }));
 vi.mock("@/lib/gmail/labels", () => ({
   CATEGORY_LABEL_NAMES: { interested: "Interested" },

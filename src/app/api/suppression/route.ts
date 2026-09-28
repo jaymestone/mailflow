@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { findAliasCandidates } from "@/lib/suppression/aliasCandidates";
 
 const VALID_REASONS = ["bounce", "opt_out", "manual", "departed"];
 const EMAIL_RE = /[^\s,;<>()]+@[^\s,;<>()]+\.[^\s,;<>()]+/g;
@@ -13,8 +14,8 @@ export async function POST(request: Request) {
   if (!text?.trim()) return NextResponse.json({ error: "text required" }, { status: 400 });
   if (!VALID_REASONS.includes(reason)) return NextResponse.json({ error: "invalid reason" }, { status: 400 });
 
-  const found = text.match(EMAIL_RE) ?? [];
-  const emails = [...new Set(found.map((e: string) => e.toLowerCase()))];
+  const found: string[] = text.match(EMAIL_RE) ?? [];
+  const emails: string[] = [...new Set(found.map((e) => e.toLowerCase()))];
   if (emails.length === 0) return NextResponse.json({ error: "no email addresses found" }, { status: 400 });
 
   const supabase = await createClient();
@@ -28,9 +29,22 @@ export async function POST(request: Request) {
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
+  // Suppression matches on the exact address, so the same person at a
+  // different domain keeps receiving mail. Report those rather than block
+  // on them -- the suppression just made is still correct, it may simply
+  // be incomplete. See src/lib/suppression/aliasCandidates.ts.
+  let aliasWarnings: Awaited<ReturnType<typeof findAliasCandidates>> = [];
+  try {
+    aliasWarnings = await findAliasCandidates(supabase, emails);
+  } catch {
+    // A failure here must not make a successful suppression look failed.
+    aliasWarnings = [];
+  }
+
   return NextResponse.json({
     found: emails.length,
     added: toInsert.length,
     alreadySuppressed: emails.length - toInsert.length,
+    aliasWarnings,
   });
 }

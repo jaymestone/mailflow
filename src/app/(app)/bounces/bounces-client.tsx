@@ -17,7 +17,15 @@ export function AddSuppressionForm() {
   const [text, setText] = useState("");
   const [reason, setReason] = useState("bounce");
   const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<{ found: number; added: number; alreadySuppressed: number } | null>(null);
+  const [result, setResult] = useState<{
+    found: number;
+    added: number;
+    alreadySuppressed: number;
+    aliasWarnings?: {
+      suppressing: string;
+      candidates: { contactId: string; email: string; name: string | null; venue: string | null }[];
+    }[];
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   async function submit() {
@@ -82,6 +90,30 @@ export function AddSuppressionForm() {
           already suppressed.
         </p>
       )}
+      {/* Suppression matches the exact address, so the same person on an
+          old domain keeps getting mail. Surfacing it here because it looks
+          like success otherwise. */}
+      {result?.aliasWarnings?.map((w) => (
+        <div key={w.suppressing} className="mt-2.5 rounded-[2px] border border-error/40 bg-error/5 px-2.5 py-2">
+          <p className="text-xs text-ink">
+            <span className="font-semibold">Still reachable.</span> You suppressed{" "}
+            <span className="font-mono">{w.suppressing}</span>, but the same name is in your contacts on another domain
+            and will keep receiving mail:
+          </p>
+          <ul className="mt-1.5 space-y-0.5">
+            {w.candidates.map((c) => (
+              <li key={c.contactId} className="text-xs text-muted-2">
+                <span className="font-mono text-ink">{c.email}</span>
+                {c.name ? ` — ${c.name}` : ""}
+                {c.venue ? ` · ${c.venue}` : ""}
+              </li>
+            ))}
+          </ul>
+          <p className="mt-1.5 text-xs text-muted-3">
+            Paste those addresses in above as well if it&rsquo;s the same person.
+          </p>
+        </div>
+      ))}
     </section>
   );
 }

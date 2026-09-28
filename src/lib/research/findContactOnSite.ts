@@ -55,6 +55,14 @@ export const MAX_PAGES = 6;
 
 const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
 
+/** Naming-convention placeholders printed on staff pages to show the house
+ * email format — "firstname.lastname@outlet.com". They are instructions,
+ * not addresses, and mailing one is a guaranteed bounce. Found in a real
+ * run over 106 outlet domains: americana-uk.com and latimes.com both
+ * publish one. */
+const PLACEHOLDER_LOCAL =
+  /^(first|last|f)?(name|initial)?[._-]?(first|last|sur)?(name|initial)?$|^(firstname|lastname|surname|yourname|name|email|user|username|initial\.?lastname|f\.?lastname|first\.?last)$/i;
+
 /** Local parts that are never worth mailing. */
 const JUNK_LOCAL =
   /^(no-?reply|noreply|donotreply|do-not-reply|postmaster|mailer-daemon|bounce|unsubscribe|abuse|webmaster|privacy|legal|dmca|security|sentry|wordpress|admin|root|test|example|user|name|email|your|someone)$/i;
@@ -91,7 +99,7 @@ export function rootDomain(host: string): string {
  * sites: admissions@eku.edu, admissions@ghc.edu and staffsenate@du.edu all
  * came back ranked as though they were people. */
 const WRONG_DESK =
-  /^(admissions?|apply|enroll|enrol|registrar|alumni|advancement|development|giving|donate|donations?|philanthropy|hr|humanresources|careers?|jobs|employment|recruiting|payroll|purchasing|accounts?payable|ap|billing|finance|library|athletics|sports|facilities|maintenance|it|helpdesk|parking|police|safety|health|counseling|housing|dining|bookstore|webmaster|media|news|newsletter|subscribe|volunteers?|membership|store|merch|rentals?|weddings?|catering|banquet|privacy|compliance)$/i;
+  /^(admissions?|apply|enroll|enrol|registrar|alumni|advancement|development|giving|donate|donations?|philanthropy|hr|humanresources|careers?|jobs|employment|recruiting|payroll|purchasing|accounts?payable|ap|billing|finance|library|athletics|sports|facilities|maintenance|it|helpdesk|parking|police|safety|health|counseling|housing|dining|bookstore|webmaster|media|news|newsletter|subscribe|subscriptions?|volunteers?|membership|store|merch|rentals?|weddings?|catering|banquet|privacy|compliance|sales|ads|advertise|advertising|bizdev|businessdevelopment|sponsorship|underwriting|psa|feedback|readers?[._-]?representative|corrections|legal)$/i;
 
 function classify(local: string): SiteContact["kind"] {
   // Checked before the booking patterns: "media" and "rentals" would
@@ -116,6 +124,7 @@ export function extractEmails(html: string, host: string, foundOn: string): Site
     const [local, domain] = lower.split("@");
     if (!local || !domain) continue;
     if (JUNK_LOCAL.test(local)) continue;
+    if (PLACEHOLDER_LOCAL.test(local)) continue;
     if (JUNK_DOMAIN.test(domain)) continue;
     // Must belong to the venue. An agency's or web designer's address in
     // the footer is not the venue's booking contact.

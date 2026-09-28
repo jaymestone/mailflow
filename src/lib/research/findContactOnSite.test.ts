@@ -246,3 +246,32 @@ describe("box office is not programming", () => {
     if (result.found) expect(result.candidates[0].email).toBe("programming@v.org");
   });
 });
+
+describe("real-run failures, found over 106 outlet domains", () => {
+  it("rejects naming-convention placeholders printed on staff pages", () => {
+    // americana-uk.com and latimes.com both publish these to show the house
+    // format. They are instructions, not addresses.
+    const html = "firstname.lastname@outlet.com firstname.surname@outlet.com real.person@outlet.com";
+    const got = extractEmails(html, "outlet.com", "/staff").map((c) => c.email);
+    expect(got).toEqual(["real.person@outlet.com"]);
+  });
+
+  it("treats advertising and business desks as wrong-desk, not contacts", () => {
+    // The raw run offered ads@pitchfork.com and bizdev@nydailynews.com as
+    // replacements for departed music writers.
+    const html = "ads@v.org sales@v.org bizdev@v.org advertising@v.org sponsorship@v.org";
+    const kinds = extractEmails(html, "v.org", "/contact").map((c) => c.kind);
+    expect(kinds.every((k) => k === "wrong-desk")).toBe(true);
+  });
+
+  it("treats a reader-complaints or PSA line as wrong-desk", () => {
+    const html = "readers.representative@v.org psa@v.org feedback@v.org";
+    const kinds = extractEmails(html, "v.org", "/contact").map((c) => c.kind);
+    expect(kinds.every((k) => k === "wrong-desk")).toBe(true);
+  });
+
+  it("still keeps a genuine named person whose name resembles nothing", () => {
+    const html = "malte.wienker@v.de";
+    expect(extractEmails(html, "v.de", "/about/staff")[0].kind).toBe("person");
+  });
+});

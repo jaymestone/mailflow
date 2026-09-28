@@ -15,7 +15,11 @@ export type MergeContact = {
 };
 
 const MERGE_FIELDS: Record<string, (c: MergeContact) => string> = {
-  "first name": (c) => c.first_name?.trim() || "there",
+  // "Folks" rather than "there" at Jayme's request (2026-09-27): it's the
+  // convention already used throughout the contact list, so a nameless
+  // contact reads the same whether the fallback fired or the word was
+  // stored in first_name.
+  "first name": (c) => c.first_name?.trim() || "Folks",
   "last name": (c) => c.last_name?.trim() || "",
   // venue_short wins when set. Deliberately the SAME token rather than a
   // separate {{Venue Short}}: every existing template and campaign then
@@ -27,7 +31,7 @@ const MERGE_FIELDS: Record<string, (c: MergeContact) => string> = {
   state: (c) => c.state?.trim() || "",
   "venue type": (c) => c.venue_type?.trim() || "",
   // Deliberately has NO fallback string. Every other merge field can
-  // degrade gracefully -- "there" for a missing first name reads fine --
+  // degrade gracefully -- "Folks" for a missing first name reads fine --
   // but there is no sensible stand-in for "the artists you looked at". A
   // blank would produce "I think  could be especially good", and any
   // generic filler would be a claim about behaviour that did not happen.

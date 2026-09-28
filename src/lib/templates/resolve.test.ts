@@ -14,7 +14,7 @@ describe("resolveMergeFields", () => {
   });
 
   it("falls back to the field's default when the contact value is missing or blank", () => {
-    expect(resolveMergeFields("{{First Name}}", {})).toBe("there");
+    expect(resolveMergeFields("{{First Name}}", {})).toBe("Folks");
     expect(resolveMergeFields("{{Venue}}", { venue: "   " })).toBe("your venue");
     expect(resolveMergeFields("{{Last Name}}", {})).toBe("");
   });

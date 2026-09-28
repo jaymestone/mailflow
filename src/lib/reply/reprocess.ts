@@ -56,6 +56,7 @@ function freshTickResult(): ReplyTickResult {
     suppressed: 0,
     pausedElsewhere: 0,
     removedForReplacement: 0,
+    referralsHarvested: 0,
     errors: [],
     historyResets: [],
   };

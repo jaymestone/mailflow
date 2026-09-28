@@ -8,6 +8,7 @@ import { classifyBounce, extractBouncedRecipientCandidates } from "./bounceDetec
 import { matchInboundMessage } from "./matching";
 import { classifyReply } from "./classify";
 import type { ReplyCategory } from "./types";
+import { harvestReferralFromReply } from "@/lib/research/harvestReferrals";
 
 const DEFAULT_OOO_SNOOZE_DAYS = 7;
 
@@ -69,6 +70,9 @@ export type ReplyTickResult = {
   suppressed: number;
   pausedElsewhere: number;
   removedForReplacement: number;
+  /** Successors read straight out of a departure reply and filed for
+   * approval — see harvestReferralFromReply. Costs nothing per hit. */
+  referralsHarvested: number;
   errors: { account: string; error: string }[];
   // Populated whenever an account's history checkpoint turned out to be
   // unusable (see wasReset in gmail/history.ts) and a direct-search
@@ -493,6 +497,26 @@ export async function processOneMessage(
         venue_website: effectiveContact.website,
         removed_contact_name: [effectiveContact.first_name, effectiveContact.last_name].filter(Boolean).join(" ") || null,
       });
+      // Most departure replies name the successor outright ("please
+      // contact X"), so read it here rather than paying a web search to
+      // rediscover it later — 64% of departures in the list do this. The
+      // harvested contact lands in a review list with NO campaign
+      // membership, so it cannot send anything until it's approved.
+      // Deliberately after the queue insert and before the delete, so the
+      // venue context is still readable from the contact row.
+      if (category === "ooo_departed") {
+        try {
+          const harvested = await harvestReferralFromReply(supabase, {
+            body: email.bodyText ?? "",
+            senderEmail: effectiveContact.email,
+            venueContext: effectiveContact,
+          });
+          if (harvested) result.referralsHarvested++;
+        } catch {
+          // A referral is a bonus, never a reason to fail the tick or
+          // leave a dead contact in place.
+        }
+      }
       await supabase.from("contacts").delete().eq("id", effectiveContactId);
       result.removedForReplacement++;
     } else if (category === "opt_out" && match.contactId) {
@@ -568,6 +592,7 @@ export async function runReplyPollTick(supabase: SupabaseClient): Promise<ReplyT
     suppressed: 0,
     pausedElsewhere: 0,
     removedForReplacement: 0,
+    referralsHarvested: 0,
     errors: [],
     historyResets: [],
   };

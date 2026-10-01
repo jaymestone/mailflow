@@ -3,6 +3,7 @@ import { createHash } from "crypto";
 import { isLeadGenSpam } from "./spam";
 import { normalizeSubject, pickCounterpart, threadKeyFor } from "./threadKey";
 import { computeIsLive, computeStatus, type ConversationStatus } from "./status";
+import { regionFor } from "./region";
 
 /** Rebuilds the conversation board from the mail Mailflow has ingested.
  *
@@ -84,6 +85,17 @@ export async function runConversationBuildTick(
   );
 
   const manual = await readAll<ManualRow>(supabase, "manual_sends", "id, gmail_thread_id, subject, from_email, sent_at");
+
+  // Venue and region come from the contact record where there is one. The
+  // catalogue venue name is the one Jayme's lists and segments already
+  // use, so taking it from here keeps the board joinable to the rest of
+  // the CRM; the summariser only fills these in when no contact matched.
+  const contacts = await readAll<{ id: string; venue: string | null; state: string | null; country: string | null }>(
+    supabase,
+    "contacts",
+    "id, venue, state, country",
+  );
+  const contactById = new Map(contacts.map((c) => [c.id, c]));
 
   const result: ConversationBuildResult = {
     inboundConsidered: 0,
@@ -206,8 +218,12 @@ export async function runConversationBuildTick(
     if (prior) result.updated++;
     else result.created++;
 
+    const contact = a.contactId ? contactById.get(a.contactId) : undefined;
+
     rows.push({
       thread_key: a.threadKey,
+      ...(contact?.venue ? { venue: contact.venue } : {}),
+      ...(contact ? { region: regionFor(contact.state, contact.country) } : {}),
       gmail_thread_ids: [...a.threadIds],
       contact_id: a.contactId,
       // status_override is Jayme's column, set in Notion. It is read here

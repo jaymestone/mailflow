@@ -10,10 +10,19 @@ import Anthropic from "@anthropic-ai/sdk";
  * to a $3,000 figure from earlier in the thread, when it was actually
  * accepting Jayme's $3,500 counter that Mailflow had never captured.
  *
- * Hence two rules encoded in the prompt below: read every message, and
- * when the closing message is an assent with no number in it, report the
- * fee as unknown rather than quoting an older figure. A wrong number here
- * is worse than a blank one -- Jayme would price a deal off it.
+ * The first fix for that over-corrected and is worth recording, because
+ * the failure looked like a model problem and was not. The rule said: if
+ * the closing message assents without naming a figure, report null. Carey's
+ * closing message is "Let's do it!", so the model dutifully threw away the
+ * $3,500 as well -- the whole board came back with no Confirmed deals and
+ * the count of threads carrying a fee wandered between runs, because the
+ * instruction and the obvious reading disagreed.
+ *
+ * The rule now says what was actually meant: an assent agrees to the most
+ * recent figure before it, so resolve that one. Null is for threads where
+ * no figure was ever named. "Don't quote a stale number" and "don't
+ * discard a known one" are both required; only stating the first produced
+ * a tracker that silently unpriced its best deals.
  */
 
 let client: Anthropic | null = null;
@@ -59,7 +68,7 @@ const SCHEMA = {
     fee_amount: {
       type: ["number", "null"],
       description:
-        "The CURRENT fee figure in USD, if one is live. Null when no number has been named, when the only numbers are a range, or when the last message agrees to something without restating the figure. Never carry forward an older number to fill this in.",
+        "The CURRENT fee figure in USD, if one is live. A figure that a closing assent is agreeing to counts as named -- resolve it from the message before. Null only when no figure appears in the thread at all, when the only figures are a range or guide price, or when the last one named was rejected outright. Never carry forward a figure that a later counter superseded.",
     },
     fee_note: {
       type: ["string", "null"],
@@ -96,9 +105,10 @@ function systemPrompt(): string {
     "Rules:",
     "1. Read every message in order. The deal terms are often stated once, early, and never repeated.",
     "2. A thread is a negotiation. The last message is rarely the whole story.",
-    "3. If the final message agrees to something without naming a figure, set fee_amount to null. Do NOT reach back for an earlier number -- an older figure is very likely the one that was countered, and reporting it as live would misprice the deal.",
-    "4. Report only what the messages say. Never infer a fee, a date or a capacity that nobody wrote.",
-    "5. The gist is for someone who has read this thread before and needs to recall it in one line. Concrete nouns, not 'they are interested'.",
+    "3. When the final message is an assent with no number in it ('let's do it', 'that works'), it is agreeing to the MOST RECENT figure named before it. Report that figure. Do not report an older figure that one superseded, and do not report null -- the agreed number is known, it is just stated one message earlier.",
+    "4. Use null for fee_amount only when no figure has been named anywhere in the thread, when the only figures are a range or a guide price, or when the last figure named was explicitly rejected without a counter.",
+    "5. Report only what the messages say. Never infer a fee, a date or a capacity that nobody wrote.",
+    "6. The gist is for someone who has read this thread before and needs to recall it in one line. Concrete nouns, not 'they are interested'.",
   ].join("\n");
 }
 
@@ -140,16 +150,13 @@ export async function summarizeThread(messages: ThreadMessage[]): Promise<Thread
       model: "claude-opus-5",
       max_tokens: 2048,
       system: systemPrompt(),
-      // Medium, not low. This looked like bounded extraction against a
-      // fixed schema, but it is not: reading a negotiation means tracking
-      // which of several figures is still live and whether an exchange
-      // amounted to agreement. At low effort the same thread gave
-      // different answers between runs -- re-summarising the priced
-      // threads moved the count with a fee from 24 to 18, and Blue Waters
-      // produced a gist saying "booked, agreement sent Sept 30" while
-      // still reporting the booking as not agreed. Both are the same
-      // failure: the reasoning needed to reconcile a sequence was being
-      // skipped. The cost is bounded by the per-tick batch, not by this.
+      // Medium, not low. Raised while chasing the unpriced-deal bug above,
+      // which turned out to be the contradictory prompt rule rather than
+      // effort -- so this is not what fixed it, and the note is here so
+      // nobody re-derives that. Kept anyway: reconciling which of several
+      // figures is still live across a negotiation is reasoning, not
+      // extraction, and low was visibly unstable on the same input.
+      // Per-tick cost is bounded by the batch size and the deadline.
       output_config: { effort: "medium", format: { type: "json_schema", schema: SCHEMA } },
       messages: [{ role: "user", content: renderThread(messages) }],
     },

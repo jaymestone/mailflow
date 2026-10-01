@@ -140,10 +140,17 @@ export async function summarizeThread(messages: ThreadMessage[]): Promise<Thread
       model: "claude-opus-5",
       max_tokens: 2048,
       system: systemPrompt(),
-      // Low effort: this is bounded extraction against a fixed schema, run
-      // in bulk over hundreds of threads. The judgment it needs is in the
-      // rules above, not in depth of reasoning.
-      output_config: { effort: "low", format: { type: "json_schema", schema: SCHEMA } },
+      // Medium, not low. This looked like bounded extraction against a
+      // fixed schema, but it is not: reading a negotiation means tracking
+      // which of several figures is still live and whether an exchange
+      // amounted to agreement. At low effort the same thread gave
+      // different answers between runs -- re-summarising the priced
+      // threads moved the count with a fee from 24 to 18, and Blue Waters
+      // produced a gist saying "booked, agreement sent Sept 30" while
+      // still reporting the booking as not agreed. Both are the same
+      // failure: the reasoning needed to reconcile a sequence was being
+      // skipped. The cost is bounded by the per-tick batch, not by this.
+      output_config: { effort: "medium", format: { type: "json_schema", schema: SCHEMA } },
       messages: [{ role: "user", content: renderThread(messages) }],
     },
     { timeout: 20000, maxRetries: 0 },

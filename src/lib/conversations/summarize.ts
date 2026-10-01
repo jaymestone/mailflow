@@ -76,7 +76,8 @@ const SCHEMA = {
     },
     is_agreed: {
       type: "boolean",
-      description: "True only when both sides have agreed to a booking in principle. An enthusiastic 'we'd love to' with nothing settled is NOT agreed.",
+      description:
+        "True when both sides have settled on playing: a fee accepted by both, a date agreed, or a contract sent or signed. Contracting still being outstanding does NOT make it untrue -- that is precisely the state this is meant to catch. An enthusiastic 'we'd love to have you' with no figure and no date is NOT agreed, and neither is a venue saying its own calendar is full.",
     },
     is_small: {
       type: "boolean",

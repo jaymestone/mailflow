@@ -70,7 +70,15 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "No such active account", accounts: (accounts ?? []).map((a) => a.email_address) }, { status: 400 });
   }
 
-  const accessToken = await getAccessToken(admin, account.id);
+  let accessToken: string;
+  try {
+    accessToken = await getAccessToken(admin, account.id);
+  } catch (err) {
+    return NextResponse.json(
+      { error: "token", account: account.email_address, detail: err instanceof Error ? err.message : String(err) },
+      { status: 500 },
+    );
+  }
 
   let recorded = 0;
   let skipped = 0;
@@ -78,6 +86,7 @@ export async function POST(request: Request) {
   let token = pageToken;
   let stoppedOnDeadline = false;
 
+  try {
   do {
     // Held so that stopping partway through a page resumes at THIS page
     // rather than the next one -- advancing the cursor before the page is
@@ -116,6 +125,21 @@ export async function POST(request: Request) {
       }
     }
   } while (token && !stoppedOnDeadline && Date.now() - startedAt < DEADLINE_MS);
+  } catch (err) {
+    // Report what actually went wrong rather than letting the throw
+    // become an empty 500 the caller cannot act on.
+    return NextResponse.json(
+      {
+        error: "scan",
+        detail: err instanceof Error ? err.message : String(err),
+        account: account.email_address,
+        scanned,
+        recorded,
+        resumeFrom: token,
+      },
+      { status: 500 },
+    );
+  }
 
   return NextResponse.json({
     account: account.email_address,

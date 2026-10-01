@@ -53,6 +53,7 @@ function freshTickResult(): ReplyTickResult {
     bounces: 0,
     softBounces: 0,
     replies: 0,
+    spam: 0,
     suppressed: 0,
     pausedElsewhere: 0,
     removedForReplacement: 0,

@@ -6,6 +6,8 @@ import { applyGmailLabel, CATEGORY_LABEL_NAMES, getOrCreateLabelId } from "@/lib
 import { OAuthTokenRevokedError } from "@/lib/oauth/google";
 import { classifyBounce, extractBouncedRecipientCandidates } from "./bounceDetection";
 import { matchInboundMessage } from "./matching";
+import { isLeadGenSpam } from "@/lib/conversations/spam";
+import { recordManualSend } from "./recordManualSend";
 import { classifyReply } from "./classify";
 import type { ReplyCategory } from "./types";
 import { harvestReferralFromReply } from "@/lib/research/harvestReferrals";
@@ -67,6 +69,9 @@ export type ReplyTickResult = {
   bounces: number;
   softBounces: number;
   replies: number;
+  /** Cold lead-gen mail filtered out structurally, with no model call --
+   * see src/lib/conversations/spam.ts. */
+  spam: number;
   suppressed: number;
   pausedElsewhere: number;
   removedForReplacement: number;
@@ -117,7 +122,11 @@ async function applyCategoryLabel(
   // is handled automatically) — archived out of INBOX but still fully
   // visible/filterable under their own label.
   const shouldArchive =
-    category === "bounce" || category === "ooo_departed" || category === "ooo_temporary" || category === "opt_out";
+    category === "bounce" ||
+    category === "ooo_departed" ||
+    category === "ooo_temporary" ||
+    category === "opt_out" ||
+    category === "spam";
   const removeLabelIds: string[] = [];
   if (shouldArchive) removeLabelIds.push("INBOX");
   // Gmail's own spam filter can flag a genuine reply to an outbound
@@ -128,7 +137,10 @@ async function applyCategoryLabel(
   // real reply, so by definition it isn't actually spam -- always un-spam
   // it rather than leaving a genuine, actionable reply sitting somewhere
   // Jayme would never think to check.
-  if (currentLabelIds.includes("SPAM")) removeLabelIds.push("SPAM");
+  // ...with the obvious exception of mail we ourselves identified as
+  // spam, where Gmail agreeing with us is the correct outcome to leave in
+  // place.
+  if (currentLabelIds.includes("SPAM") && category !== "spam") removeLabelIds.push("SPAM");
   await applyGmailLabel(accessToken, gmailMessageId, labelId, removeLabelIds.length > 0 ? removeLabelIds : undefined);
 }
 
@@ -246,7 +258,13 @@ export async function processOneMessage(
     }
 
     const email = await fetchGmailMessage(accessToken, messageId);
-    if (email.labelIds.includes("SENT")) return "skipped"; // our own outbound copy
+    if (email.labelIds.includes("SENT")) {
+      // Our own outbound copy: still skipped for classification, but now
+      // recorded as thread activity first, so the conversation pass can
+      // tell a deal waiting on Jayme from one waiting on the venue.
+      await recordManualSend(supabase, account.id, email);
+      return "skipped";
+    }
 
     // The SENT label only exists in the mailbox that actually sent the
     // message, so it cannot catch mail between two of our OWN connected
@@ -263,12 +281,22 @@ export async function processOneMessage(
     // original Message-ID in In-Reply-To, which tier 1 of matching would
     // resolve to that contact -- recording Jayme's words as the venue's
     // reply and silently halting their sequence.
-    if (ownAddresses.has(email.fromEmail.toLowerCase())) return "skipped";
+    if (ownAddresses.has(email.fromEmail.toLowerCase())) {
+      await recordManualSend(supabase, account.id, email);
+      return "skipped";
+    }
 
     // classifyBounce is instant and local (no network call) -- safe to run
     // before either budget check below, since it's what decides which
     // budget actually applies.
     const bounceInfo = classifyBounce(email);
+
+    // Also instant and local: cold lead-gen mail is identified from the
+    // tracking code in its subject, not its wording (see spam.ts). Worth
+    // doing before the budget split because it moves a quarter of all
+    // ingested mail off the expensive path -- 1,247 of 5,015 messages were
+    // paying for a model call to be misread as a lead.
+    const isSpam = !bounceInfo.isBounce && isLeadGenSpam(email.subject);
 
     // Cheap path (no LLM call) vs. expensive path (a real classifyReply
     // call, up to 12s) draw from separate tick-wide budgets -- see
@@ -276,7 +304,7 @@ export async function processOneMessage(
     // Bailing out here (before matching/insert/anything else) leaves
     // nothing behind, so this message is cleanly retried on a later tick,
     // same as hitting the old single shared cap used to behave.
-    if (bounceInfo.isBounce) {
+    if (bounceInfo.isBounce || isSpam) {
       if (budget.cheap <= 0) return "budget-exhausted";
       budget.cheap--;
     } else {
@@ -293,6 +321,9 @@ export async function processOneMessage(
       category = "bounce";
       result.bounces++;
       if (!bounceInfo.isHard) result.softBounces++;
+    } else if (isSpam) {
+      category = "spam";
+      result.spam++;
     } else {
       const classified = await classifyReply(email.subject, email.bodyText);
       category = classified.category;
@@ -613,6 +644,7 @@ export async function runReplyPollTick(supabase: SupabaseClient): Promise<ReplyT
     accountsPolled: 0,
     messagesFetched: 0,
     bounces: 0,
+    spam: 0,
     softBounces: 0,
     replies: 0,
     suppressed: 0,

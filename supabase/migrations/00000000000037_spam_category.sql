@@ -1,0 +1,17 @@
+-- RUN THIS FILE ON ITS OWN, not pasted alongside other statements.
+-- Postgres allows ALTER TYPE ... ADD VALUE inside a transaction but will
+-- not let the new value be USED in that same transaction, and the Supabase
+-- SQL editor wraps a pasted script in one.
+--
+-- A quarter of everything the reply poller ingests (1,247 of 5,015
+-- messages) is one cold lead-gen campaign that reads as warm interest and
+-- is classified 'interested' -- 125 of the 458 live booking threads. It
+-- costs a model call each and gets the "Interested" label applied in
+-- Gmail, which puts it in the same place Jayme reads real enquiries.
+--
+-- It is detected structurally, without a model call, by the per-send
+-- tracking code in its subject (src/lib/conversations/spam.ts). This value
+-- gives that detection somewhere honest to record itself: not
+-- 'not_interested' (which would say a real person declined) and not
+-- 'unclear' (which invites a human to go and look).
+alter type reply_category add value if not exists 'spam';

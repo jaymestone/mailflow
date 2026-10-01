@@ -6,7 +6,8 @@ export type ReplyCategory =
   | "ooo_departed"
   | "opt_out"
   | "bounce"
-  | "unclear";
+  | "unclear"
+  | "spam";
 
 export type ParsedEmail = {
   gmailMessageId: string;

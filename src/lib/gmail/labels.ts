@@ -15,6 +15,7 @@ export const CATEGORY_LABEL_NAMES: Record<ReplyCategory, string> = {
   opt_out: "Opted Out",
   bounce: "Bounce",
   unclear: "Unclear",
+  spam: "Spam",
 };
 
 type GmailLabel = { id: string; name: string };

@@ -63,6 +63,44 @@ function sanitizeHeaderValue(value: string): string {
   return value.replace(/[\r\n]+/g, " ").trim();
 }
 
+/** A MIME header value is ASCII-only per RFC 5322 -- the `charset=UTF-8`
+ * declared on the body parts says nothing about the headers, which sit
+ * above it. Writing raw UTF-8 bytes into `Subject:` therefore hands the
+ * receiving client bytes it has no charset for, and it falls back to a
+ * single-byte reading: "Bluebird Café" arrives as "Bluebird CafÃ©", and as
+ * "CafÃƒÂ©" once a client that re-decodes its own output has had a turn.
+ * Non-ASCII values are wrapped as an RFC 2047 encoded-word instead, which
+ * is the only portable way to carry them. Accented venue names reach the
+ * subject through the {{Venue}} merge field, so this is reachable from
+ * ordinary contact data, not just an unusual template. */
+export function encodeHeaderWord(value: string): string {
+  if (!/[^\x20-\x7E]/.test(value)) return value;
+  const prefix = "=?UTF-8?B?";
+  const suffix = "?=";
+  // An encoded-word may not exceed 75 characters including its delimiters,
+  // so a long subject becomes several words folded onto continuation lines.
+  // Base64 is 4 characters per 3 bytes, hence the floor to a 3-byte boundary.
+  const maxBytes = Math.floor((75 - prefix.length - suffix.length) / 4) * 3;
+  const words: string[] = [];
+  let chunk = "";
+  let bytes = 0;
+  // Iterating the string yields whole code points, so a multi-byte
+  // character is never split across two encoded-words (which would decode
+  // to a replacement character on the other end).
+  for (const char of value) {
+    const size = Buffer.byteLength(char, "utf8");
+    if (bytes + size > maxBytes) {
+      words.push(prefix + Buffer.from(chunk, "utf8").toString("base64") + suffix);
+      chunk = "";
+      bytes = 0;
+    }
+    chunk += char;
+    bytes += size;
+  }
+  if (chunk) words.push(prefix + Buffer.from(chunk, "utf8").toString("base64") + suffix);
+  return words.join("\r\n ");
+}
+
 /** Formats a From/Reply-To style address as `"Display Name" <email>` so
  * recipients see a real name instead of a bare address — without a
  * display name, a bare `From: j@x.com` header shows just the address (or
@@ -71,7 +109,12 @@ function sanitizeHeaderValue(value: string): string {
  * the quoted-string per RFC 5322, so it's escaped rather than stripped. */
 export function formatFromAddress(displayName: string | null, email: string): string {
   if (!displayName?.trim()) return email;
-  return `"${displayName.trim().replace(/"/g, '\\"')}" <${email}>`;
+  const name = displayName.trim();
+  // An encoded-word is not recognised inside a quoted string, so an
+  // accented display name has to go in bare rather than quoted. The
+  // encoded form contains no characters that need quoting anyway.
+  if (/[^\x20-\x7E]/.test(name)) return `${encodeHeaderWord(name)} <${email}>`;
+  return `"${name.replace(/"/g, '\\"')}" <${email}>`;
 }
 
 function buildRawMessage(opts: SendMessageOpts) {
@@ -79,7 +122,7 @@ function buildRawMessage(opts: SendMessageOpts) {
     `From: ${sanitizeHeaderValue(opts.from)}`,
     `To: ${sanitizeHeaderValue(opts.to)}`,
     opts.replyTo ? `Reply-To: ${sanitizeHeaderValue(opts.replyTo)}` : null,
-    `Subject: ${sanitizeHeaderValue(opts.subject)}`,
+    `Subject: ${encodeHeaderWord(sanitizeHeaderValue(opts.subject))}`,
     `Message-ID: ${sanitizeHeaderValue(opts.messageId)}`,
     opts.inReplyTo ? `In-Reply-To: ${sanitizeHeaderValue(opts.inReplyTo)}` : null,
     opts.references ? `References: ${sanitizeHeaderValue(opts.references)}` : null,

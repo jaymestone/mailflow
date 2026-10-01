@@ -27,6 +27,36 @@ export const maxDuration = 60;
 /** Leaves headroom inside maxDuration for the final writes. */
 const DEADLINE_MS = 45_000;
 
+/** Gmail bills per-user quota in units per second, not requests: a
+ * messages.get costs 5, against a 250/second ceiling. Firing a page of
+ * 100 gets as fast as the network allows blows straight through it and
+ * every one comes back 429 -- the first run of this backfill scanned 100
+ * messages and recorded none for exactly that reason. ~70ms between gets
+ * holds it near 70 units/second, well under, and a page still clears in
+ * about seven seconds. */
+const GET_SPACING_MS = 70;
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Retries a rate-limited fetch a couple of times before giving up. A 429
+ * means "too fast", not "broken" -- treating it as a permanent failure
+ * silently drops real messages from the backfill. */
+async function fetchWithRateLimitRetry<T>(fn: () => Promise<T>, attempts = 3): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastError = err;
+      const message = err instanceof Error ? err.message : String(err);
+      const rateLimited = message.includes("429") || message.includes("rateLimitExceeded") || message.includes("quota");
+      if (!rateLimited) throw err;
+      await sleep(500 * (attempt + 1));
+    }
+  }
+  throw lastError;
+}
+
 type SearchPage = { ids: string[]; nextPageToken: string | null };
 
 async function searchSentPage(accessToken: string, query: string, pageToken: string | null): Promise<SearchPage> {
@@ -83,6 +113,8 @@ export async function POST(request: Request) {
   let recorded = 0;
   let skipped = 0;
   let scanned = 0;
+  let failed = 0;
+  const failures: string[] = [];
   let token = pageToken;
   let stoppedOnDeadline = false;
 
@@ -92,7 +124,7 @@ export async function POST(request: Request) {
     // rather than the next one -- advancing the cursor before the page is
     // fully processed would silently skip its remainder.
     const currentToken = token;
-    const page = await searchSentPage(accessToken, `in:sent after:${after}`, currentToken);
+    const page = await fetchWithRateLimitRetry(() => searchSentPage(accessToken, `in:sent after:${after}`, currentToken));
     token = page.nextPageToken;
 
     // Skip anything already recorded before spending a fetch on it -- a
@@ -116,13 +148,17 @@ export async function POST(request: Request) {
         break;
       }
       try {
-        const email = await fetchGmailMessage(accessToken, id);
+        const email = await fetchWithRateLimitRetry(() => fetchGmailMessage(accessToken, id));
         await recordManualSend(admin, account.id, email);
         recorded++;
-      } catch {
-        // One unreadable message must not end the pass; the next run
-        // picks it up again.
+      } catch (err) {
+        // One unreadable message must not end the pass -- but it must not
+        // vanish either. Swallowing these is what made the first run look
+        // like it had simply found nothing to do.
+        failed++;
+        if (failures.length < 5) failures.push(err instanceof Error ? err.message.slice(0, 160) : String(err));
       }
+      await sleep(GET_SPACING_MS);
     }
   } while (token && !stoppedOnDeadline && Date.now() - startedAt < DEADLINE_MS);
   } catch (err) {
@@ -135,6 +171,8 @@ export async function POST(request: Request) {
         account: account.email_address,
         scanned,
         recorded,
+        failed,
+        failures,
         resumeFrom: token,
       },
       { status: 500 },
@@ -146,6 +184,8 @@ export async function POST(request: Request) {
     scanned,
     recorded,
     skipped,
+    failed,
+    failures,
     stoppedOnDeadline,
     // Null means this account is finished.
     nextPageToken: token,

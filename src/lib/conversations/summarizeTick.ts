@@ -20,10 +20,24 @@ const MAX_PER_TICK = 3;
  * ceiling, given each summarise call may itself take up to 20s. */
 const DEADLINE_MS = 18_000;
 
+/** How long a thread waits after its Nth consecutive failure, in minutes.
+ *
+ * Front-loaded because the common failure here is the 20s timeout firing on
+ * a slow call, which the next tick usually gets through -- so the first
+ * retry should be soon. Past the fourth, the thread is failing for a reason
+ * a retry will not fix (a body that always times out, a response that never
+ * parses) and once a day is enough to notice it recovering without paying
+ * for the discovery. The last entry is the cap. */
+const BACKOFF_MINUTES = [15, 60, 240, 1440];
+
 export type SummarizeTickResult = {
   candidates: number;
   summarized: number;
   failed: number;
+  /** Threads that have changed but are serving a backoff. Surfaced so a
+   * thread stuck at the 24h cap is visible in cron_health instead of just
+   * quietly never appearing. */
+  blocked: number;
   stoppedOnDeadline: boolean;
   errors: string[];
 };
@@ -33,11 +47,62 @@ type ConversationRow = {
   thread_key: string;
   gmail_thread_ids: string[];
   summary_source_hash: string | null;
+  summarized_source_hash: string | null;
   summarized_at: string | null;
   status_override: string | null;
   last_message_at: string | null;
   last_direction: "inbound" | "outbound" | null;
+  summarize_attempts: number | null;
+  summarize_blocked_until: string | null;
 };
+
+type StaleFields = {
+  summarized_at: string | null;
+  last_message_at: string | null;
+  summary_source_hash: string | null;
+  summarized_source_hash: string | null;
+};
+
+/** Whether this thread's gist is missing or was written from a different
+ * set of messages than the thread now holds.
+ *
+ * The hash comparison is the real test. buildTick derives
+ * summary_source_hash from the thread's message set, and that set is
+ * exactly what renderThread turns into the prompt -- so an unchanged hash
+ * means a byte-identical prompt and therefore the same summary back.
+ * Paying for that call buys nothing.
+ *
+ * Timestamps were the previous test and are kept only as a fallback for
+ * rows built before the hash column was populated. They are a weaker
+ * question: last_message_at and summarized_at can both move for reasons
+ * that have nothing to do with the thread's contents, and when they do,
+ * every live conversation bills a fresh Opus call to regenerate the gist
+ * it already had.
+ */
+export function isStale(row: StaleFields): boolean {
+  if (!row.summarized_at) return true;
+  if (row.summary_source_hash) return row.summary_source_hash !== row.summarized_source_hash;
+  return row.last_message_at !== null && row.summarized_at < row.last_message_at;
+}
+
+/** Whether this thread is serving a backoff from earlier failures.
+ *
+ * Deliberately not cleared when a new message arrives. The failures that
+ * reach the 24h cap are ones a different message will not fix, and letting
+ * fresh activity reset the clock is what would turn a permanently broken
+ * thread back into a per-tick charge. */
+export function isBlocked(row: { summarize_blocked_until: string | null }, now: Date): boolean {
+  return row.summarize_blocked_until !== null && new Date(row.summarize_blocked_until) > now;
+}
+
+/** Minutes to hold a thread back after `attempts` consecutive failures. */
+export function backoffMinutes(attempts: number): number {
+  return BACKOFF_MINUTES[Math.min(Math.max(attempts, 1), BACKOFF_MINUTES.length) - 1];
+}
+
+export function needsSummary(row: StaleFields & { summarize_blocked_until: string | null }, now: Date): boolean {
+  return isStale(row) && !isBlocked(row, now);
+}
 
 export async function runConversationSummarizeTick(
   supabase: SupabaseClient,
@@ -49,12 +114,13 @@ export async function runConversationSummarizeTick(
     candidates: 0,
     summarized: 0,
     failed: 0,
+    blocked: 0,
     stoppedOnDeadline: false,
     errors: [],
   };
 
-  // A conversation needs (re)summarising when a message has arrived since
-  // its gist was written, or when it has never been summarised at all.
+  // A conversation needs (re)summarising when its message set has changed
+  // since its gist was written, or when it has never been summarised.
   //
   // That test compares two columns, which PostgREST cannot express as a
   // filter, so the staleness check happens here instead. Cheap at this
@@ -62,7 +128,7 @@ export async function runConversationSummarizeTick(
   // avoids a schema change purely to let the database ask the question.
   const { data: candidates, error } = await supabase
     .from("conversations")
-    .select("id, thread_key, gmail_thread_ids, summary_source_hash, summarized_at, status_override, last_message_at, last_direction")
+    .select("id, thread_key, gmail_thread_ids, summary_source_hash, summarized_source_hash, summarized_at, status_override, last_message_at, last_direction, summarize_attempts, summarize_blocked_until")
     .eq("is_live", true)
     .order("last_message_at", { ascending: false, nullsFirst: false })
     .limit(1000);
@@ -70,10 +136,10 @@ export async function runConversationSummarizeTick(
 
   // Newest activity first: if the batch cannot reach everything, the
   // threads that moved most recently are the ones worth being current.
-  const rows = ((candidates ?? []) as ConversationRow[]).filter(
-    (r) => !r.summarized_at || (r.last_message_at !== null && r.summarized_at < r.last_message_at),
-  );
+  const stale = ((candidates ?? []) as ConversationRow[]).filter(isStale);
+  const rows = stale.filter((r) => !isBlocked(r, now));
   result.candidates = rows.length;
+  result.blocked = stale.length - rows.length;
 
   for (const row of rows.slice(0, MAX_PER_TICK)) {
     if (Date.now() - startedAt > DEADLINE_MS) {
@@ -118,6 +184,18 @@ export async function runConversationSummarizeTick(
           status: row.status_override ?? status,
           is_live: isLive,
           summarized_at: now.toISOString(),
+          // Records WHICH messages this gist was written from, so the next
+          // tick can tell "already current" from "needs redoing". Taken
+          // from the row read at the top of the batch rather than
+          // recomputed: if a message landed while this call was in flight,
+          // the hash on the row has already moved on and the thread should
+          // stay a candidate, not be marked current from stale input.
+          summarized_source_hash: row.summary_source_hash,
+          // One success clears the whole failure history: the next failure
+          // should start again at the short wait rather than inherit a
+          // stale count from a problem that has since gone away.
+          summarize_attempts: 0,
+          summarize_blocked_until: null,
           updated_at: now.toISOString(),
         })
         .eq("id", row.id);
@@ -126,7 +204,24 @@ export async function runConversationSummarizeTick(
       result.summarized++;
     } catch (err) {
       result.failed++;
-      result.errors.push(`${row.thread_key}: ${err instanceof Error ? err.message : "unknown"}`);
+      const attempts = (row.summarize_attempts ?? 0) + 1;
+      const wait = backoffMinutes(attempts);
+      result.errors.push(
+        `${row.thread_key}: ${err instanceof Error ? err.message : "unknown"} (attempt ${attempts}, retry in ${wait}m)`,
+      );
+      // Recording the failure is what stops this thread being retried on
+      // every tick from here on. Its own failure must not replace the real
+      // error in the report, so it is caught and appended rather than
+      // thrown -- and if it does fail, the worst case is the previous
+      // behaviour of retrying next tick.
+      const { error: backoffError } = await supabase
+        .from("conversations")
+        .update({
+          summarize_attempts: attempts,
+          summarize_blocked_until: new Date(now.getTime() + wait * 60_000).toISOString(),
+        })
+        .eq("id", row.id);
+      if (backoffError) result.errors.push(`${row.thread_key}: recording backoff -- ${backoffError.message}`);
     }
   }
 

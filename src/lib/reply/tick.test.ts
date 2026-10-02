@@ -610,3 +610,103 @@ describe("runReplyPollTick bounce-body recovery for an unmatched hard bounce", (
     expect(inserts.find((i) => i.table === "replacement_queue")?.row.campaign_ids).toEqual(["camp-1"]);
   });
 });
+
+describe("runReplyPollTick departure from a shared mailbox", () => {
+  /** Records which tables were written to, so the test can assert on the
+   * destructive side effects rather than on internal flags. */
+  function recordingSupabase(contactRow: Record<string, unknown> | null) {
+    const writes: { table: string; op: string }[] = [];
+    const client = {
+      from(table: string) {
+        const builder: Record<string, unknown> = {
+          select: () => builder,
+          insert: () => {
+            writes.push({ table, op: "insert" });
+            return builder;
+          },
+          update: () => {
+            writes.push({ table, op: "update" });
+            return builder;
+          },
+          delete: () => {
+            writes.push({ table, op: "delete" });
+            return builder;
+          },
+          eq: () => builder,
+          ilike: () => builder,
+          in: () => builder,
+          order: () => builder,
+          limit: () => builder,
+          maybeSingle: async () => ({ data: table === "contacts" ? contactRow : null, error: null }),
+          single: async () => ({ data: null, error: null }),
+          then: (resolve: (v: { data: unknown; error: null }) => void) => resolve({ data: null, error: null }),
+        };
+        // The accounts lookup is the only read that needs real data --
+        // without it the tick polls nothing and every assertion below
+        // passes vacuously.
+        if (table === "connected_accounts") {
+          return {
+            select: () => ({
+              eq: () => ({
+                data: [{ id: "acc-1", email_address: "stone@jaymestone.com", last_history_id: "50" }],
+                error: null,
+              }),
+            }),
+          } as unknown as typeof builder;
+        }
+        return builder;
+      },
+    } as unknown as SupabaseClient;
+    return { client, writes };
+  }
+
+  const CONTACT = {
+    email: "festival@celticfestival.ca",
+    first_name: "Eleanor",
+    last_name: "Robinson",
+    website: null,
+    venue: "Celtic Roots Festival",
+    venue_type: "Festival",
+    city: "Goderich",
+    state: "ON",
+    country: "Canada",
+    list_id: "list-1",
+  };
+
+  async function runWith(fromEmail: string, contact: Record<string, unknown>) {
+    const { classifyReply } = await import("./classify");
+    vi.mocked(classifyReply).mockResolvedValue({ category: "ooo_departed", reasoning: "", oooReturnDate: null });
+    const { matchInboundMessage } = await import("./matching");
+    vi.mocked(matchInboundMessage).mockResolvedValue({
+      campaignId: null,
+      contactId: "contact-1",
+      outboundSendId: null,
+      matchMethod: "thread",
+      alsoImplicatedContactIds: [],
+    } as never);
+
+    fetchGmailMessage.mockResolvedValue(fakeEmail({ fromEmail, bodyText: "Eleanor has not been part of the programming for 15 years." }));
+    listNewMessageIds.mockResolvedValue({ messageIds: ["msg-1"], newHistoryId: "1000", wasReset: false, nextPageToken: null });
+
+    const { client, writes } = recordingSupabase({ ...contact, email: fromEmail });
+    const result = await runReplyPollTick(client);
+    return { result, writes };
+  }
+
+  it("does not suppress, delete or queue a replacement when the departure comes from a shared mailbox", async () => {
+    const { result, writes } = await runWith("festival@celticfestival.ca", CONTACT);
+
+    expect(writes.some((w) => w.table === "suppression" && w.op === "insert")).toBe(false);
+    expect(writes.some((w) => w.table === "contacts" && w.op === "delete")).toBe(false);
+    expect(writes.some((w) => w.table === "replacement_queue")).toBe(false);
+    expect(result.departuresOnRoleAddress).toBe(1);
+  });
+
+  it("still suppresses a departure from a personal address", async () => {
+    // The guard must be narrow: an ordinary departure has to keep working.
+    const { result, writes } = await runWith("eleanor.robinson@celticfestival.ca", CONTACT);
+
+    expect(writes.some((w) => w.table === "suppression" && w.op === "insert")).toBe(true);
+    expect(result.departuresOnRoleAddress).toBe(0);
+  });
+});

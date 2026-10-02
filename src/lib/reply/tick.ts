@@ -7,6 +7,7 @@ import { OAuthTokenRevokedError } from "@/lib/oauth/google";
 import { classifyBounce, extractBouncedRecipientCandidates } from "./bounceDetection";
 import { matchInboundMessage } from "./matching";
 import { isLeadGenSpam } from "@/lib/conversations/spam";
+import { isRoleAddress } from "./roleAddress";
 import { recordManualSend } from "./recordManualSend";
 import { classifyReply } from "./classify";
 import type { ReplyCategory } from "./types";
@@ -72,6 +73,10 @@ export type ReplyTickResult = {
   /** Cold lead-gen mail filtered out structurally, with no model call --
    * see src/lib/conversations/spam.ts. */
   spam: number;
+  /** Departure replies that arrived from a shared mailbox and were
+   * therefore NOT suppressed or deleted. Each one needs a human to say
+   * who the venue's contact is now -- see roleAddress.ts. */
+  departuresOnRoleAddress: number;
   suppressed: number;
   pausedElsewhere: number;
   removedForReplacement: number;
@@ -115,6 +120,10 @@ async function applyCategoryLabel(
   category: ReplyCategory,
   currentLabelIds: string[],
   labelCache: Map<string, string>,
+  /** A departure from a shared mailbox is the one case that is labelled
+   * but NOT archived: nothing was suppressed or deleted, so it is the
+   * only signal Jayme gets that the venue needs a new contact. */
+  keepInInbox = false,
 ): Promise<void> {
   const labelId = await getOrCreateLabelId(accessToken, accountId, CATEGORY_LABEL_NAMES[category], labelCache);
   // Bounce/departed DSNs, OOO auto-replies, and opt-outs pile up and
@@ -128,7 +137,7 @@ async function applyCategoryLabel(
     category === "opt_out" ||
     category === "spam";
   const removeLabelIds: string[] = [];
-  if (shouldArchive) removeLabelIds.push("INBOX");
+  if (shouldArchive && !keepInInbox) removeLabelIds.push("INBOX");
   // Gmail's own spam filter can flag a genuine reply to an outbound
   // campaign as spam -- confirmed live: a real "interested" reply from a
   // festival contact landed in Spam, invisible in the normal inbox even
@@ -431,6 +440,23 @@ export async function processOneMessage(
     // bounce, so this is a no-op for every other category.
     const effectiveContactId = match.contactId ?? recoveredContactId;
 
+    // A departure announced from a shared mailbox says a PERSON left, not
+    // that the ADDRESS is dead -- festival@venue.org outlives whoever was
+    // reading it. Suppressing and deleting on that signal destroys the
+    // venue's main point of contact: it happened to Goderich Celtic Roots
+    // Festival, whose Artistic Director wrote from festival@celticfestival.ca
+    // to say a third party had not been involved for fifteen years, and had
+    // that address suppressed for her trouble while the two personal
+    // addresses she asked to be removed kept receiving the sequence.
+    //
+    // 217 contacts currently pair a real person's name with a shared
+    // inbox, each carrying the same hazard. Those departures are left
+    // intact and surfaced for Jayme instead -- the reply stays in the
+    // inbox under its label rather than being archived, and the contact
+    // keeps its campaign pause so nothing sends in the meantime.
+    const departedOnRoleAddress = category === "ooo_departed" && isRoleAddress(email.fromEmail);
+    if (departedOnRoleAddress) result.departuresOnRoleAddress++;
+
     // Captured before the ooo_departed pause step below flips these
     // to 'paused' — so a later replacement contact can be re-enrolled
     // in the campaigns this contact was actually being pursued in,
@@ -460,7 +486,7 @@ export async function processOneMessage(
       effectiveContact = data ?? null;
     }
 
-    if (isHardBounce || category === "opt_out" || category === "ooo_departed") {
+    if ((isHardBounce || category === "opt_out" || category === "ooo_departed") && !departedOnRoleAddress) {
       // A bounce's real target is the resolved contact's own address, not
       // the DSN sender — opt_out/ooo_departed are genuine replies FROM
       // the contact, where email.fromEmail is already correct as-is.
@@ -536,7 +562,7 @@ export async function processOneMessage(
     // alone — so the contact still gets removed (suppression already
     // covers recontact regardless), it's just never queued to look
     // for someone else there.
-    if ((isHardBounce || category === "ooo_departed") && effectiveContactId && effectiveContact) {
+    if ((isHardBounce || category === "ooo_departed") && effectiveContactId && effectiveContact && !departedOnRoleAddress) {
       await supabase.from("replacement_queue").insert({
         venue: effectiveContact.venue,
         venue_type: effectiveContact.venue_type,
@@ -590,7 +616,15 @@ export async function processOneMessage(
     // being silently stuck forever (confirmed live, 2026-09-15: a Gmail
     // rate-limit incident left several classified messages permanently
     // unlabeled until this retry path existed).
-    await applyCategoryLabel(accessToken, account.id, email.gmailMessageId, category, email.labelIds, labelCache);
+    await applyCategoryLabel(
+      accessToken,
+      account.id,
+      email.gmailMessageId,
+      category,
+      email.labelIds,
+      labelCache,
+      departedOnRoleAddress,
+    );
     if (inserted) {
       await supabase.from("inbound_messages").update({ label_applied_at: new Date().toISOString() }).eq("id", inserted.id);
     }
@@ -645,6 +679,7 @@ export async function runReplyPollTick(supabase: SupabaseClient): Promise<ReplyT
     messagesFetched: 0,
     bounces: 0,
     spam: 0,
+    departuresOnRoleAddress: 0,
     softBounces: 0,
     replies: 0,
     suppressed: 0,

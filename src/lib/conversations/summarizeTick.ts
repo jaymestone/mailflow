@@ -54,6 +54,7 @@ type ConversationRow = {
   last_direction: "inbound" | "outbound" | null;
   summarize_attempts: number | null;
   summarize_blocked_until: string | null;
+  revision: number | null;
 };
 
 type StaleFields = {
@@ -128,7 +129,7 @@ export async function runConversationSummarizeTick(
   // avoids a schema change purely to let the database ask the question.
   const { data: candidates, error } = await supabase
     .from("conversations")
-    .select("id, thread_key, gmail_thread_ids, summary_source_hash, summarized_source_hash, summarized_at, status_override, last_message_at, last_direction, summarize_attempts, summarize_blocked_until")
+    .select("id, thread_key, gmail_thread_ids, summary_source_hash, summarized_source_hash, summarized_at, status_override, last_message_at, last_direction, summarize_attempts, summarize_blocked_until, revision")
     .eq("is_live", true)
     .order("last_message_at", { ascending: false, nullsFirst: false })
     .limit(1000);
@@ -196,6 +197,12 @@ export async function runConversationSummarizeTick(
           // stale count from a problem that has since gone away.
           summarize_attempts: 0,
           summarize_blocked_until: null,
+          // gist, next_action, fee_amount and artist are all on the Notion
+          // card, and this pass is the only writer of them. The build pass
+          // used to bump every row's revision on every run, which hid that
+          // -- now that it only bumps what it actually changed, a new gist
+          // would never reach Notion unless this says so.
+          revision: (row.revision ?? 0) + 1,
           updated_at: now.toISOString(),
         })
         .eq("id", row.id);

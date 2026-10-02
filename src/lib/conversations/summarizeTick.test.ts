@@ -141,6 +141,7 @@ describe("runConversationSummarizeTick", () => {
     last_direction: "inbound",
     summarize_attempts: 0,
     summarize_blocked_until: null,
+    revision: 412,
     ...over,
   });
 
@@ -167,6 +168,17 @@ describe("runConversationSummarizeTick", () => {
     expect(updates[0].payload.gist).toBe(SUMMARY.gist);
     expect(updates[0].payload.summarize_attempts).toBe(0);
     expect(updates[0].payload.summarize_blocked_until).toBeNull();
+  });
+
+  // The gist, fee and artist are all on the Notion card and this pass is
+  // their only writer. Once the build pass stopped bumping every row's
+  // revision on every run, this became the only thing that can tell Notion
+  // a summary was rewritten.
+  it("bumps the revision so a new gist reaches Notion", async () => {
+    const { client, updates } = fakeSupabase([row({ summary_source_hash: "def" })], MESSAGES);
+    await runConversationSummarizeTick(client, { now: NOW });
+
+    expect(updates[0].payload.revision).toBe(413);
   });
 
   // Without this, the next tick would see summarized_source_hash matching

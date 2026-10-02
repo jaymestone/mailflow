@@ -411,3 +411,79 @@ describe("runConversationBuildTick field preservation", () => {
     expect(Object.keys(upserted[0]).sort()).toEqual(Object.keys(upserted[1]).sort());
   });
 });
+
+describe("runConversationBuildTick revision", () => {
+  const INBOUND = [
+    {
+      id: "1",
+      gmail_thread_id: "t1",
+      subject: "The Little Mercies",
+      from_email: "carey.eyer@gmail.com",
+      received_at: "2026-09-29T10:00:00Z",
+      matched_contact_id: null,
+      classification_category: "interested",
+    },
+  ];
+  const THREAD_KEY = "carey.eyer@gmail.com::the little mercies";
+
+  /** A stored row that already matches exactly what this pass would
+   * compute from INBOUND -- so nothing Notion shows has moved. */
+  const settled = (over: Record<string, unknown> = {}) => ({
+    id: "c1",
+    thread_key: THREAD_KEY,
+    status: "needs_reply",
+    status_override: null,
+    venue: null,
+    region: null,
+    fee_amount: null,
+    revision: 412,
+    is_live: true,
+    last_message_at: "2026-09-29T10:00:00Z",
+    last_direction: "inbound",
+    ...over,
+  });
+
+  const build = async (conversations: Record<string, unknown>[]) => {
+    const { client, upserted } = fakeSupabase({
+      connected_accounts: OWN,
+      manual_sends: [],
+      inbound_messages: INBOUND,
+      conversations,
+      contacts: [],
+    });
+    const result = await runConversationBuildTick(client, { now: new Date("2026-10-01T00:00:00Z") });
+    return { upserted, result };
+  };
+
+  // The bug this closes: revision was bumped on every pass regardless, so
+  // with this running every minute and the Notion sync clearing ~30 rows a
+  // quarter hour, every row was permanently ahead of Notion and `pending`
+  // could never reach zero.
+  it("leaves the revision alone when nothing Notion shows has moved", async () => {
+    const { upserted, result } = await build([settled()]);
+
+    expect(upserted[0].revision).toBe(412);
+    expect(result.changed).toBe(0);
+  });
+
+  it("bumps the revision when a new message arrives", async () => {
+    const { upserted, result } = await build([settled({ last_message_at: "2026-09-20T10:00:00Z" })]);
+
+    expect(upserted[0].revision).toBe(413);
+    expect(result.changed).toBe(1);
+  });
+
+  it("bumps the revision when the status changes", async () => {
+    const { upserted, result } = await build([settled({ status: "awaiting_them" })]);
+
+    expect(upserted[0].revision).toBe(413);
+    expect(result.changed).toBe(1);
+  });
+
+  it("starts a brand-new conversation at revision 1", async () => {
+    const { upserted, result } = await build([]);
+
+    expect(upserted[0].revision).toBe(1);
+    expect(result.changed).toBe(1);
+  });
+});

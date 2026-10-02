@@ -44,6 +44,11 @@ export type ConversationBuildResult = {
   created: number;
   updated: number;
   droppedStale: number;
+  /** Rows whose Notion-visible fields actually moved, and so got a new
+   * revision. In steady state this is 0 and the Notion sync has nothing
+   * to do -- which is the signal that was unreadable while every row was
+   * bumped on every pass. */
+  changed: number;
 };
 
 /** PostgREST caps a response at 1000 rows regardless of the limit asked
@@ -104,6 +109,7 @@ export async function runConversationBuildTick(
     created: 0,
     updated: 0,
     droppedStale: 0,
+    changed: 0,
   };
 
   type Agg = {
@@ -197,7 +203,12 @@ export async function runConversationBuildTick(
     revision: number;
     is_live: boolean;
     last_message_at: string | null;
-  }>(supabase, "conversations", "id, thread_key, status, status_override, venue, region, fee_amount, revision, is_live, last_message_at");
+    last_direction: "inbound" | "outbound" | null;
+  }>(
+    supabase,
+    "conversations",
+    "id, thread_key, status, status_override, venue, region, fee_amount, revision, is_live, last_message_at, last_direction",
+  );
   const existingByKey = new Map(existing.map((e) => [e.thread_key, e]));
 
   const rows: Record<string, unknown>[] = [];
@@ -245,16 +256,42 @@ export async function runConversationBuildTick(
     // Precedence: the contact record first (its name is the one Jayme's
     // lists use), then whatever is already stored, which is usually the
     // summariser's reading for a thread that never matched a contact.
+    const venue = contact?.venue ?? prior?.venue ?? null;
+    const region = contact ? regionFor(contact.state, contact.country) : (prior?.region ?? null);
+    // status_override is Jayme's column, set in Notion. It is read here
+    // and never written, so a correction he makes there survives every
+    // rebuild.
+    const nextStatus = prior?.status_override ?? status;
+
+    // revision is what the Notion sync tests to decide a row needs
+    // pushing (revision > notion_synced_revision), so "changed" has to
+    // mean the fields Notion actually shows. Bumping it unconditionally
+    // meant every row was permanently ahead of Notion: this pass runs
+    // every minute and the sync clears about thirty rows a quarter hour,
+    // so the gap only ever widened and `pending` could never reach zero
+    // -- it sat at the full size of the board, reporting a backlog that
+    // was really just a counter racing itself.
+    //
+    // Only the fields THIS pass owns are compared. gist, next_action,
+    // fee_amount and artist are Notion-visible too, but the summarise
+    // pass writes those, and it now bumps the revision itself.
+    const unchanged =
+      prior !== undefined &&
+      prior.venue === venue &&
+      prior.region === region &&
+      prior.status === nextStatus &&
+      prior.last_message_at === lastMessageAt &&
+      prior.last_direction === lastDirection &&
+      prior.is_live === isLive;
+    if (!unchanged) result.changed++;
+
     rows.push({
       thread_key: a.threadKey,
-      venue: contact?.venue ?? prior?.venue ?? null,
-      region: contact ? regionFor(contact.state, contact.country) : (prior?.region ?? null),
+      venue,
+      region,
       gmail_thread_ids: [...a.threadIds],
       contact_id: a.contactId,
-      // status_override is Jayme's column, set in Notion. It is read here
-      // and never written, so a correction he makes there survives every
-      // rebuild.
-      status: prior?.status_override ?? status,
+      status: nextStatus,
       last_message_at: lastMessageAt,
       last_direction: lastDirection,
       first_inbound_at: a.firstInboundAt,
@@ -262,7 +299,7 @@ export async function runConversationBuildTick(
       // Changing the hash is what tells the summariser this thread has
       // moved and its gist needs rewriting.
       summary_source_hash: createHash("sha1").update(a.messageIds.sort().join("|")).digest("hex"),
-      revision: (prior?.revision ?? 0) + 1,
+      revision: unchanged ? prior.revision : (prior?.revision ?? 0) + 1,
       updated_at: now.toISOString(),
     });
   }

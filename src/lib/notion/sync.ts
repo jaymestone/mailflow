@@ -141,7 +141,10 @@ export async function syncConversationsToNotion(
   opts: { databaseId: string; token: string; startedAt?: number; deadlineMs?: number; maxRows?: number },
 ): Promise<NotionSyncResult> {
   const startedAt = opts.startedAt ?? Date.now();
-  const deadlineMs = opts.deadlineMs ?? 40_000;
+  // 18s, not 40: whatever triggers this has to be able to wait for it, and
+  // the one that does disconnects at 30 seconds. A default that cannot
+  // finish under its own caller is a trap for the next one.
+  const deadlineMs = opts.deadlineMs ?? 18_000;
   const maxRows = opts.maxRows ?? 60;
 
   const result: NotionSyncResult = {

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { EXPECTED_INTERVAL_MINUTES } from "./constants";
 import { checkAndSendAlerts } from "./alerts";
 
 vi.mock("@/lib/oauth/google", () => ({ OAuthTokenRevokedError: class OAuthTokenRevokedError extends Error {} }));
@@ -41,11 +42,24 @@ function sequenced(...results: ReturnType<typeof stub>[]) {
   return () => results[Math.min(i++, results.length - 1)];
 }
 
-const HEALTHY_CRON = [
-  { job_name: "geocode-tick", last_run_at: new Date().toISOString(), last_result: {} },
-  { job_name: "send-engine-tick", last_run_at: new Date().toISOString(), last_result: {} },
-  { job_name: "reply-poll-tick", last_run_at: new Date().toISOString(), last_result: {} },
-];
+/** Every monitored job, all just run. Derived from the constant rather
+ * than listed by hand: spelling the three out meant that adding a fourth
+ * monitored job turned every test in this file into an unrelated
+ * stale-cron failure. */
+const HEALTHY_CRON = Object.keys(EXPECTED_INTERVAL_MINUTES).map((job_name) => ({
+  job_name,
+  last_run_at: new Date().toISOString(),
+  last_result: {},
+}));
+
+/** HEALTHY_CRON with a single job pushed back into the past. */
+function cronWithStale(jobName: string, minutesAgo: number) {
+  return HEALTHY_CRON.map((r) =>
+    r.job_name === jobName
+      ? { ...r, last_run_at: new Date(Date.now() - minutesAgo * 60_000).toISOString() }
+      : r,
+  );
+}
 
 const DEFAULT_ACCOUNT_ID = "862e145b-333c-4845-b943-a113eaf82940";
 
@@ -148,11 +162,8 @@ describe("checkAndSendAlerts", () => {
     const { sendGmailMessage } = await import("@/lib/gmail/client");
     vi.mocked(sendGmailMessage).mockClear();
 
-    const staleCron = [
-      { job_name: "geocode-tick", last_run_at: new Date(Date.now() - 30 * 60_000).toISOString(), last_result: {} }, // 30m ago, expected every 1m
-      { job_name: "send-engine-tick", last_run_at: new Date().toISOString(), last_result: {} },
-      { job_name: "reply-poll-tick", last_run_at: new Date().toISOString(), last_result: {} },
-    ];
+    // 30m ago, expected every 1m.
+    const staleCron = cronWithStale("geocode-tick", 30);
     const upserts: unknown[] = [];
     const supabase = baseSupabase({ cronHealth: staleCron, upserts });
 
@@ -171,11 +182,7 @@ describe("checkAndSendAlerts", () => {
     const { sendGmailMessage } = await import("@/lib/gmail/client");
     vi.mocked(sendGmailMessage).mockClear();
 
-    const staleCron = [
-      { job_name: "geocode-tick", last_run_at: new Date(Date.now() - 30 * 60_000).toISOString(), last_result: {} },
-      { job_name: "send-engine-tick", last_run_at: new Date().toISOString(), last_result: {} },
-      { job_name: "reply-poll-tick", last_run_at: new Date().toISOString(), last_result: {} },
-    ];
+    const staleCron = cronWithStale("geocode-tick", 30);
     // Cooldown recorded 1 hour ago -- well inside the 4h window.
     const recentCooldown = [{ key: "alert_cooldown:stale-cron:geocode-tick", value: new Date(Date.now() - 60 * 60_000).toISOString() }];
     const supabase = baseSupabase({ cronHealth: staleCron, cooldownRows: recentCooldown });

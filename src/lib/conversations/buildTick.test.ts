@@ -341,3 +341,73 @@ describe("runConversationBuildTick status preservation", () => {
     expect(upserted[0].status).toBe("awaiting_them");
   });
 });
+
+describe("runConversationBuildTick field preservation", () => {
+  it("does not wipe a venue the summariser supplied for an unmatched thread", async () => {
+    // PostgREST normalises a bulk upsert to the union of the keys it is
+    // given and writes NULL into any a row omitted. Including venue only
+    // when a contact matched therefore erased it rather than leaving it
+    // alone, and confirmed deals were appearing with no venue name.
+    const { client, upserted } = fakeSupabase({
+      connected_accounts: OWN,
+      manual_sends: [],
+      contacts: [],
+      inbound_messages: [
+        {
+          id: "1",
+          gmail_thread_id: "t1",
+          subject: "The Little Mercies",
+          from_email: "carey.eyer@gmail.com",
+          received_at: "2026-09-29T10:00:00Z",
+          matched_contact_id: null,
+          classification_category: "interested",
+        },
+      ],
+      conversations: [
+        {
+          id: "c1",
+          thread_key: "carey.eyer@gmail.com::the little mercies",
+          status: "confirmed",
+          status_override: null,
+          venue: "Blue Waters Bluegrass Festival",
+          region: "West Coast",
+          fee_amount: 3500,
+          revision: 3,
+          is_live: true,
+          last_message_at: "2026-09-29T10:00:00Z",
+        },
+      ],
+    });
+
+    await runConversationBuildTick(client, { now: new Date("2026-10-01T00:00:00Z") });
+
+    expect(upserted[0].venue).toBe("Blue Waters Bluegrass Festival");
+    expect(upserted[0].region).toBe("West Coast");
+  });
+
+  it("writes the same keys for every row in the batch", async () => {
+    // The actual invariant: a mixed batch where only some rows have a
+    // contact must not produce rows with differing key sets.
+    const { client, upserted } = fakeSupabase({
+      connected_accounts: OWN,
+      manual_sends: [],
+      conversations: [],
+      contacts: [{ id: "k1", venue: "Known Hall", state: "TX", country: "United States" }],
+      inbound_messages: [
+        {
+          id: "1", gmail_thread_id: "t1", subject: "Matched", from_email: "a@venue.org",
+          received_at: "2026-09-29T10:00:00Z", matched_contact_id: "k1", classification_category: "interested",
+        },
+        {
+          id: "2", gmail_thread_id: "t2", subject: "Unmatched", from_email: "b@venue.org",
+          received_at: "2026-09-29T10:00:00Z", matched_contact_id: null, classification_category: "interested",
+        },
+      ],
+    });
+
+    await runConversationBuildTick(client, { now: new Date("2026-10-01T00:00:00Z") });
+
+    expect(upserted).toHaveLength(2);
+    expect(Object.keys(upserted[0]).sort()).toEqual(Object.keys(upserted[1]).sort());
+  });
+});

@@ -191,11 +191,13 @@ export async function runConversationBuildTick(
     thread_key: string;
     status: ConversationStatus;
     status_override: ConversationStatus | null;
+    venue: string | null;
+    region: string | null;
     fee_amount: number | null;
     revision: number;
     is_live: boolean;
     last_message_at: string | null;
-  }>(supabase, "conversations", "id, thread_key, status, status_override, fee_amount, revision, is_live, last_message_at");
+  }>(supabase, "conversations", "id, thread_key, status, status_override, venue, region, fee_amount, revision, is_live, last_message_at");
   const existingByKey = new Map(existing.map((e) => [e.thread_key, e]));
 
   const rows: Record<string, unknown>[] = [];
@@ -233,10 +235,20 @@ export async function runConversationBuildTick(
 
     const contact = a.contactId ? contactById.get(a.contactId) : undefined;
 
+    // Every row must carry the SAME keys. PostgREST normalises a bulk
+    // upsert to the union of the keys it sees and writes NULL into the
+    // ones a given row omitted -- so conditionally including venue here
+    // did not "leave it alone", it erased it. That silently wiped the
+    // venue the summariser had extracted on every build pass, which is
+    // why confirmed deals were showing up with no venue name at all.
+    //
+    // Precedence: the contact record first (its name is the one Jayme's
+    // lists use), then whatever is already stored, which is usually the
+    // summariser's reading for a thread that never matched a contact.
     rows.push({
       thread_key: a.threadKey,
-      ...(contact?.venue ? { venue: contact.venue } : {}),
-      ...(contact ? { region: regionFor(contact.state, contact.country) } : {}),
+      venue: contact?.venue ?? prior?.venue ?? null,
+      region: contact ? regionFor(contact.state, contact.country) : (prior?.region ?? null),
       gmail_thread_ids: [...a.threadIds],
       contact_id: a.contactId,
       // status_override is Jayme's column, set in Notion. It is read here

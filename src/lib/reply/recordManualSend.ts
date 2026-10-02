@@ -26,6 +26,23 @@ export async function recordManualSend(
   email: ParsedEmail,
 ): Promise<void> {
   try {
+    // Mailflow's own campaign sends are in the Sent folder too, and they
+    // are not Jayme writing back. Counting them would mark every live
+    // thread "awaiting them" the moment a sequence step went out and hide
+    // every deal actually waiting on him -- the whole point of capturing
+    // his side. The historical backfill pulled 914 of its first 1,000
+    // messages from the campaigns before this check existed.
+    //
+    // Matched on the message id, not the thread: follow-up steps are sent
+    // as replies inside the same thread as his manual ones, so excluding
+    // by thread would throw away exactly the messages worth keeping.
+    const { data: campaignSend } = await supabase
+      .from("outbound_sends")
+      .select("id")
+      .eq("gmail_message_id", email.gmailMessageId)
+      .maybeSingle();
+    if (campaignSend) return;
+
     await supabase.from("manual_sends").upsert(
       {
         connected_account_id: accountId,

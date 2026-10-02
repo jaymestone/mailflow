@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { syncConversationsToNotion } from "@/lib/notion/sync";
+import { pullStatusOverridesFromNotion, syncConversationsToNotion } from "@/lib/notion/sync";
 import { recordHeartbeat } from "@/lib/health/heartbeat";
 
 export const maxDuration = 60;
@@ -28,7 +28,16 @@ export async function POST(request: Request) {
   }
 
   const admin = createAdminClient();
-  const result = await syncConversationsToNotion(admin, { databaseId: DATABASE_ID, token, startedAt });
+  const push = await syncConversationsToNotion(admin, { databaseId: DATABASE_ID, token, startedAt });
+  // Pull second, and only with whatever time is left: a backlog of
+  // outbound changes matters more than noticing an edit a few minutes
+  // sooner, and pulling is pointless on rows the push has not reached.
+  const pull = await pullStatusOverridesFromNotion(admin, {
+    token,
+    startedAt,
+    deadlineMs: 50_000,
+  });
+  const result = { ...push, pull };
   await recordHeartbeat(admin, "notion-sync-tick", result);
   return NextResponse.json({ ...result, elapsedMs: Date.now() - startedAt });
 }

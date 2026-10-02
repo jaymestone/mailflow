@@ -116,19 +116,23 @@ async function notion(path: string, init: RequestInit & { token: string }): Prom
   return body;
 }
 
-/** Reads back the columns Jayme owns before overwriting anything.
+/** Detects a Status that Jayme changed in Notion.
  *
- * Status is the one that matters: a change he makes in Notion is captured
- * as status_override so the build pass stops recomputing that row. Done
- * and My notes are never written by this sync at all, so they need no
- * protection beyond not appearing in propertiesFor. */
-async function pullOverride(token: string, pageId: string, computedStatus: string): Promise<string | null> {
+ * Only ever called on rows where Notion is already up to date with us
+ * (revision === notion_synced_revision). That condition is the whole
+ * correctness argument: if Mailflow has an unpushed change, a difference
+ * between the two sides means Notion is stale, not that a human edited
+ * it. Comparing against the *computed* status instead manufactured
+ * overrides out of the sync's own lag -- 30 rows were frozen that way
+ * before Jayme had even opened the board, including a confirmed booking
+ * pinned back to numbers_on_table. */
+async function pullOverride(token: string, pageId: string, syncedStatus: string): Promise<string | null> {
   const page = await notion(`/pages/${pageId}`, { token, method: "GET" });
   const props = (page.properties ?? {}) as Record<string, { select?: { name?: string } | null }>;
   const label = props.Status?.select?.name;
   if (!label) return null;
   const asKey = STATUS_FROM_LABEL[label];
-  if (!asKey || asKey === computedStatus) return null;
+  if (!asKey || asKey === syncedStatus) return null;
   return asKey;
 }
 
@@ -177,15 +181,15 @@ export async function syncConversationsToNotion(
           result.archived++;
         }
       } else if (row.notion_page_id) {
-        const override = await pullOverride(opts.token, row.notion_page_id, row.status);
+        // Push only. Reading Notion here cannot tell a human edit from
+        // our own un-pushed change, because by definition this row has
+        // one. Human edits are picked up by pullStatusOverrides, which
+        // only looks at rows already in sync.
         await notion(`/pages/${row.notion_page_id}`, {
           token: opts.token,
           method: "PATCH",
-          body: JSON.stringify({ properties: propertiesFor({ ...row, status: override ?? row.status }) }),
+          body: JSON.stringify({ properties: propertiesFor(row) }),
         });
-        if (override) {
-          await supabase.from("conversations").update({ status_override: override, status: override }).eq("id", row.id);
-        }
         result.updated++;
       } else {
         const created = await notion(`/pages`, {
@@ -211,6 +215,77 @@ export async function syncConversationsToNotion(
       }
     }
 
+    await sleep(REQUEST_SPACING_MS);
+  }
+
+  return result;
+}
+
+export type NotionPullResult = {
+  checked: number;
+  overridesFound: number;
+  failed: number;
+  stoppedOnDeadline: boolean;
+};
+
+/** Picks up Status changes Jayme made in Notion.
+ *
+ * Separate from the push pass on purpose. A single pass that both reads
+ * and writes cannot tell "he changed this" from "we have not pushed yet",
+ * and guessing wrong is expensive in one direction: a manufactured
+ * override freezes the row forever, because the build pass then refuses
+ * to recompute it.
+ *
+ * So this only considers rows where Notion already matches us. There, any
+ * difference is necessarily a human edit.
+ *
+ * Checks oldest-checked first so the whole board is covered over
+ * successive ticks rather than the same few rows every time.
+ */
+export async function pullStatusOverridesFromNotion(
+  supabase: SupabaseClient,
+  opts: { token: string; startedAt?: number; deadlineMs?: number; maxRows?: number },
+): Promise<NotionPullResult> {
+  const startedAt = opts.startedAt ?? Date.now();
+  const deadlineMs = opts.deadlineMs ?? 15_000;
+  const maxRows = opts.maxRows ?? 25;
+
+  const result: NotionPullResult = { checked: 0, overridesFound: 0, failed: 0, stoppedOnDeadline: false };
+
+  const { data } = await supabase
+    .from("conversations")
+    .select("id, status, revision, notion_page_id, notion_synced_revision, notion_synced_at")
+    .eq("is_live", true)
+    .not("notion_page_id", "is", null)
+    .order("notion_synced_at", { ascending: true, nullsFirst: true })
+    .limit(200);
+
+  const inSync = ((data ?? []) as Array<{
+    id: string;
+    status: string;
+    revision: number;
+    notion_page_id: string;
+    notion_synced_revision: number;
+  }>).filter((r) => r.revision === r.notion_synced_revision);
+
+  for (const row of inSync.slice(0, maxRows)) {
+    if (Date.now() - startedAt > deadlineMs) {
+      result.stoppedOnDeadline = true;
+      break;
+    }
+    try {
+      result.checked++;
+      const override = await pullOverride(opts.token, row.notion_page_id, row.status);
+      if (override) {
+        await supabase
+          .from("conversations")
+          .update({ status_override: override, status: override })
+          .eq("id", row.id);
+        result.overridesFound++;
+      }
+    } catch {
+      result.failed++;
+    }
     await sleep(REQUEST_SPACING_MS);
   }
 

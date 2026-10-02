@@ -227,3 +227,117 @@ describe("runConversationBuildTick", () => {
     expect(byKey["b@venue.org::priced enquiry"].is_live).toBe(true);
   });
 });
+
+describe("runConversationBuildTick status preservation", () => {
+  it("does not reset a confirmed deal back to numbers_on_table", async () => {
+    // The build pass cannot see is_agreed -- it lives in the summariser's
+    // output -- so it used to pass false and clobber Confirmed on every
+    // tick, which ran before the summariser on all rows. The board showed
+    // zero confirmed bookings while the model was correctly reporting
+    // Blue Waters as agreed.
+    const { client, upserted } = fakeSupabase({
+      connected_accounts: OWN,
+      manual_sends: [],
+      inbound_messages: [
+        {
+          id: "1",
+          gmail_thread_id: "t1",
+          subject: "The Little Mercies",
+          from_email: "carey.eyer@gmail.com",
+          received_at: "2026-09-29T10:00:00Z",
+          matched_contact_id: null,
+          classification_category: "interested",
+        },
+      ],
+      conversations: [
+        {
+          id: "c1",
+          thread_key: "carey.eyer@gmail.com::the little mercies",
+          status: "confirmed",
+          status_override: null,
+          fee_amount: 3500,
+          revision: 2,
+          is_live: true,
+          last_message_at: "2026-09-29T10:00:00Z",
+        },
+      ],
+      contacts: [],
+    });
+
+    await runConversationBuildTick(client, { now: new Date("2026-10-01T00:00:00Z") });
+
+    expect(upserted[0].status).toBe("confirmed");
+  });
+
+  it("keeps a parked deal parked", async () => {
+    const { client, upserted } = fakeSupabase({
+      connected_accounts: OWN,
+      manual_sends: [],
+      inbound_messages: [
+        {
+          id: "1",
+          gmail_thread_id: "t1",
+          subject: "Small show",
+          from_email: "a@venue.org",
+          received_at: "2026-09-29T10:00:00Z",
+          matched_contact_id: null,
+          classification_category: "interested",
+        },
+      ],
+      conversations: [
+        {
+          id: "c1",
+          thread_key: "a@venue.org::small show",
+          status: "parked",
+          status_override: null,
+          fee_amount: null,
+          revision: 2,
+          is_live: true,
+          last_message_at: "2026-09-29T10:00:00Z",
+        },
+      ],
+      contacts: [],
+    });
+
+    await runConversationBuildTick(client, { now: new Date("2026-10-01T00:00:00Z") });
+
+    expect(upserted[0].status).toBe("parked");
+  });
+
+  it("still flips direction on a conversation the summariser has not judged", async () => {
+    const { client, upserted } = fakeSupabase({
+      connected_accounts: OWN,
+      inbound_messages: [
+        {
+          id: "1",
+          gmail_thread_id: "t1",
+          subject: "Autumn",
+          from_email: "a@venue.org",
+          received_at: "2026-09-29T10:00:00Z",
+          matched_contact_id: null,
+          classification_category: "interested",
+        },
+      ],
+      manual_sends: [
+        { id: "m1", gmail_thread_id: "t1", subject: "Re: Autumn", from_email: "stone@jaymestone.com", sent_at: "2026-09-30T10:00:00Z" },
+      ],
+      conversations: [
+        {
+          id: "c1",
+          thread_key: "a@venue.org::autumn",
+          status: "needs_reply",
+          status_override: null,
+          fee_amount: null,
+          revision: 1,
+          is_live: true,
+          last_message_at: "2026-09-29T10:00:00Z",
+        },
+      ],
+      contacts: [],
+    });
+
+    await runConversationBuildTick(client, { now: new Date("2026-10-01T00:00:00Z") });
+
+    expect(upserted[0].status).toBe("awaiting_them");
+  });
+});

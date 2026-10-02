@@ -189,12 +189,13 @@ export async function runConversationBuildTick(
   const existing = await readAll<{
     id: string;
     thread_key: string;
+    status: ConversationStatus;
     status_override: ConversationStatus | null;
     fee_amount: number | null;
     revision: number;
     is_live: boolean;
     last_message_at: string | null;
-  }>(supabase, "conversations", "id, thread_key, status_override, fee_amount, revision, is_live, last_message_at");
+  }>(supabase, "conversations", "id, thread_key, status, status_override, fee_amount, revision, is_live, last_message_at");
   const existingByKey = new Map(existing.map((e) => [e.thread_key, e]));
 
   const rows: Record<string, unknown>[] = [];
@@ -208,12 +209,24 @@ export async function runConversationBuildTick(
     const lastDirection: "inbound" | "outbound" | null =
       !lastMessageAt ? null : lastMessageAt === lastOutbound ? "outbound" : "inbound";
 
-    // Fee and agreement come from the summarise pass; on a conversation it
-    // has not reached yet they are simply unknown, which computeStatus
-    // handles by falling back to who wrote last.
+    // Fee and agreement come from the summarise pass. This pass must not
+    // assume they are false just because it cannot see them: passing
+    // isAgreed: false here reset every Confirmed deal to
+    // numbers_on_table, and since the route runs this build before the
+    // summariser on every tick, the summariser's verdict never survived a
+    // single cycle -- the board showed zero confirmed bookings while the
+    // model was correctly reporting Blue Waters as agreed.
+    //
+    // Both flags are recoverable from the status the summariser last
+    // wrote, because 'confirmed' and 'parked' are the only states that
+    // encode them. Reading them back keeps that judgment intact while
+    // still letting a new message flip the needs_reply/awaiting_them pair,
+    // which is the only part this pass actually knows better.
     const feeAmount = prior?.fee_amount ?? null;
-    const status = computeStatus({ isAgreed: false, isSmall: false, feeAmount, lastDirection });
-    const isLive = computeIsLive({ lastMessageAt, feeAmount, isAgreed: false, now });
+    const isAgreed = prior?.status === "confirmed";
+    const isSmall = prior?.status === "parked";
+    const status = computeStatus({ isAgreed, isSmall, feeAmount, lastDirection });
+    const isLive = computeIsLive({ lastMessageAt, feeAmount, isAgreed, now });
     if (prior?.is_live && !isLive) result.droppedStale++;
     if (prior) result.updated++;
     else result.created++;

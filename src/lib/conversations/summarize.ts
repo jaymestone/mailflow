@@ -117,6 +117,13 @@ function systemPrompt(): string {
 const PER_MESSAGE_CHARS = 2500;
 const MAX_MESSAGES = 30;
 
+/** Opus is the default because of the fee-reconciliation reasoning the
+ * header describes, not because extraction needs it. The env override
+ * exists so a cheaper model can be swapped in without a deploy once
+ * compareModels.test.ts shows it agrees on the figures that matter --
+ * fee_amount and is_agreed are what the board is actually judged on. */
+const DEFAULT_MODEL = process.env.SUMMARIZER_MODEL ?? "claude-opus-5";
+
 function renderThread(messages: ThreadMessage[]): string {
   // Oldest first: the model is being asked to follow a sequence, so it
   // should read it in the order it happened.
@@ -138,7 +145,10 @@ function renderThread(messages: ThreadMessage[]): string {
     .join("\n\n");
 }
 
-export async function summarizeThread(messages: ThreadMessage[]): Promise<ThreadSummary> {
+export async function summarizeThread(
+  messages: ThreadMessage[],
+  opts: { model?: string } = {},
+): Promise<ThreadSummary> {
   if (messages.length === 0) throw new Error("summarizeThread: no messages");
 
   // Short timeout and no retries for the same reason the reply classifier
@@ -147,7 +157,7 @@ export async function summarizeThread(messages: ThreadMessage[]): Promise<Thread
   // This thread is simply re-summarised on the next tick.
   const response = await getClient().messages.create(
     {
-      model: "claude-opus-5",
+      model: opts.model ?? DEFAULT_MODEL,
       max_tokens: 2048,
       system: systemPrompt(),
       // Medium, not low. Raised while chasing the unpriced-deal bug above,

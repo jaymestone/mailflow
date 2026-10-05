@@ -15,10 +15,23 @@ export const CATEGORY_LABEL_NAMES: Record<ReplyCategory, string> = {
   opt_out: "Opted Out",
   bounce: "Bounce",
   unclear: "Unclear",
-  spam: "Spam",
+  // NOT "Spam". Gmail reserves SPAM as a system label and refuses to
+  // create a user label whose name matches one, case-insensitively, so
+  // every lead-gen message classified here failed to label and stayed
+  // stuck -- six of them across 2026-10-02..04, regenerating the health
+  // alert every four hours with no path to recovery, because a message
+  // only gets a label retry if Gmail's history happens to re-offer it.
+  //
+  // Renaming rather than binding the category to the system SPAM label:
+  // applying that would move the mail into the Spam folder and train
+  // Gmail's filter, which is a different behaviour from what this does
+  // today (archive it, label it, leave Gmail's own verdict alone -- see
+  // applyCategoryLabel). The name also says what spam.ts actually
+  // detects, which is cold lead-gen mail, not spam in general.
+  spam: "Lead-Gen Spam",
 };
 
-type GmailLabel = { id: string; name: string };
+type GmailLabel = { id: string; name: string; type?: string };
 
 /** Labels are per-mailbox in Gmail, so each connected account needs its own
  * copy of each "Mailflow/…" label the first time it's used. `cache` is
@@ -31,7 +44,11 @@ export async function getOrCreateLabelId(
   labelName: string,
   cache: Map<string, string>,
 ): Promise<string> {
-  const key = (name: string) => `${accountId}:${name}`;
+  // Keyed case-insensitively: Gmail matches label names that way when
+  // deciding whether a name is taken, so treating "Follow Up" and
+  // "follow up" as different here would mean asking it to create a label
+  // it will always refuse.
+  const key = (name: string) => `${accountId}:${name.toLowerCase()}`;
 
   const cached = cache.get(key(labelName));
   if (cached) return cached;
@@ -44,10 +61,16 @@ export async function getOrCreateLabelId(
 
   // Cache every Mailflow label already present on this account, not just
   // the one asked for — avoids a repeat list call for the next category.
+  //
+  // System labels are skipped on purpose. Matching case-insensitively is
+  // what lets a differently-cased existing label be reused, but it would
+  // also let a category silently bind to one of Gmail's own labels, and
+  // applying SPAM or TRASH to a message moves it rather than tagging it.
+  // A category must only ever resolve to a label this app owns.
+  const wanted = new Set(Object.values(CATEGORY_LABEL_NAMES).map((n) => n.toLowerCase()));
   for (const label of labels ?? []) {
-    if (Object.values(CATEGORY_LABEL_NAMES).includes(label.name)) {
-      cache.set(key(label.name), label.id);
-    }
+    if (label.type === "system") continue;
+    if (wanted.has(label.name.toLowerCase())) cache.set(key(label.name), label.id);
   }
 
   const found = cache.get(key(labelName));
@@ -58,7 +81,22 @@ export async function getOrCreateLabelId(
     headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
     body: JSON.stringify({ name: labelName, labelListVisibility: "labelShow", messageListVisibility: "show" }),
   });
-  if (!createRes.ok) throw new Error(`Gmail create label "${labelName}" failed: ${createRes.status} ${await createRes.text()}`);
+  if (!createRes.ok) {
+    const body = await createRes.text();
+    // 409 means the name is taken by something this app cannot use --
+    // in practice a reserved system label, since any user label would
+    // have been found above. Say so plainly: the raw Gmail body for this
+    // reads "Label name exists or conflicts", which gives no hint that
+    // the fix is to rename the category rather than retry it, and the
+    // failure otherwise surfaces only as a message stuck unlabelled.
+    if (createRes.status === 409) {
+      throw new Error(
+        `Gmail refuses the label name "${labelName}" on account ${accountId} -- it collides with a reserved system label. ` +
+          `Rename this category in CATEGORY_LABEL_NAMES; retrying cannot succeed.`,
+      );
+    }
+    throw new Error(`Gmail create label "${labelName}" failed: ${createRes.status} ${body}`);
+  }
   const created = (await createRes.json()) as GmailLabel;
   cache.set(key(labelName), created.id);
   return created.id;

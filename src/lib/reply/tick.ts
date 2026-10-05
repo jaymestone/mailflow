@@ -73,6 +73,10 @@ export type ReplyTickResult = {
   /** Cold lead-gen mail filtered out structurally, with no model call --
    * see src/lib/conversations/spam.ts. */
   spam: number;
+  /** Messages the label sweep below recovered: classified, but left
+   * unlabelled by an earlier failure and no longer reachable through
+   * Gmail's history. */
+  labelsRepaired: number;
   /** Departure replies that arrived from a shared mailbox and were
    * therefore NOT suppressed or deleted. Each one needs a human to say
    * who the venue's contact is now -- see roleAddress.ts. */
@@ -673,6 +677,93 @@ export async function processOneMessage(
   }
 }
 
+/** How long a message is left to the normal path before the sweep touches
+ * it. Comfortably longer than a poll interval, so the sweep only ever sees
+ * rows the ordinary retry has already had its chance at. */
+const SWEEP_MIN_AGE_MINUTES = 30;
+/** Its own small budget, deliberately not the tick's message budget: a row
+ * that cannot be labelled must never starve the processing of new mail. */
+const MAX_SWEEP_PER_TICK = 10;
+
+/** Relabels messages that are classified but whose Gmail label never
+ * applied, found by looking them up directly rather than waiting for Gmail
+ * to hand them back.
+ *
+ * retryLabelOnly can only run on a message that history.list re-offers,
+ * and it stops offering one as soon as the account's checkpoint moves past
+ * it. Anything whose label failed and then aged out of that window was
+ * therefore stuck for good -- still correctly classified, with every real
+ * side effect applied, but permanently unlabelled and regenerating the
+ * health alert every few hours with no action available to a human.
+ *
+ * Twice now that has been the live outcome: 25 rows on 2026-09-15 after a
+ * Gmail rate-limit incident, recovered only by a hand-written backfill,
+ * and six lead-gen rows across 2026-10-02..04 whose label could never have
+ * applied at all (see CATEGORY_LABEL_NAMES). The first was treated as a
+ * data problem; it was this gap both times.
+ *
+ * Reads from the database, not from Gmail's history, so recovery no longer
+ * depends on a message resurfacing.
+ */
+async function sweepUnlabeledMessages(
+  supabase: SupabaseClient,
+  accounts: { id: string; email_address: string }[],
+  labelCache: Map<string, string>,
+  result: ReplyTickResult,
+): Promise<void> {
+  const cutoff = new Date(Date.now() - SWEEP_MIN_AGE_MINUTES * 60_000).toISOString();
+  const { data: stuck } = await supabase
+    .from("inbound_messages")
+    .select("id, gmail_message_id, classification_category, connected_account_id")
+    .not("classification_category", "is", null)
+    .is("label_applied_at", null)
+    .lt("created_at", cutoff)
+    // Oldest first: these are the ones already generating the alert.
+    .order("created_at", { ascending: true })
+    .limit(MAX_SWEEP_PER_TICK);
+  if (!stuck || stuck.length === 0) return;
+
+  const budget: MessageBudget = { cheap: MAX_SWEEP_PER_TICK, expensive: 0 };
+  const byId = new Map(accounts.map((a) => [a.id, a]));
+  const tokens = new Map<string, string>();
+
+  for (const row of stuck as Array<{
+    id: string;
+    gmail_message_id: string;
+    classification_category: ReplyCategory;
+    connected_account_id: string;
+  }>) {
+    const account = byId.get(row.connected_account_id);
+    // The owning account is gone or disconnected -- there is no mailbox
+    // left to label in, and no token to try it with.
+    if (!account) continue;
+    if (!row.gmail_message_id) continue;
+    try {
+      let token = tokens.get(account.id);
+      if (!token) {
+        token = await getAccessToken(supabase, account.id);
+        tokens.set(account.id, token);
+      }
+      const outcome = await retryLabelOnly(
+        supabase,
+        account,
+        row.gmail_message_id,
+        token,
+        labelCache,
+        { id: row.id, classification_category: row.classification_category },
+        budget,
+      );
+      if (outcome === "processed") result.labelsRepaired++;
+    } catch (err) {
+      // One unrecoverable row must not stop the rest of the sweep.
+      result.errors.push({
+        account: `${account.email_address} (label sweep, message ${row.gmail_message_id})`,
+        error: err instanceof Error ? err.message : "Unknown error",
+      });
+    }
+  }
+}
+
 export async function runReplyPollTick(supabase: SupabaseClient): Promise<ReplyTickResult> {
   const result: ReplyTickResult = {
     accountsPolled: 0,
@@ -687,6 +778,7 @@ export async function runReplyPollTick(supabase: SupabaseClient): Promise<ReplyT
     removedForReplacement: 0,
     referralsHarvested: 0,
     splitRecordsPaused: 0,
+    labelsRepaired: 0,
     errors: [],
     historyResets: [],
   };
@@ -845,6 +937,17 @@ export async function runReplyPollTick(supabase: SupabaseClient): Promise<ReplyT
           .eq("id", account.id);
       }
     }
+  }
+
+  // Last, and outside the per-account loop: it works from the database
+  // rather than any one account's history, and it must run even on a tick
+  // where every account had nothing new.
+  try {
+    await sweepUnlabeledMessages(supabase, accounts ?? [], labelCache, result);
+  } catch (err) {
+    // The sweep is a recovery path. A failure in it must not fail a tick
+    // that has already polled and processed real mail successfully.
+    result.errors.push({ account: "(label sweep)", error: err instanceof Error ? err.message : "Unknown error" });
   }
 
   return result;

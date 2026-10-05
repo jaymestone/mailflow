@@ -66,6 +66,9 @@ function fakeSupabase(): SupabaseClient {
     eq: () => builder,
     ilike: () => builder,
     in: () => builder,
+    not: () => builder,
+    is: () => builder,
+    lt: () => builder,
     order: () => builder,
     limit: () => builder,
     maybeSingle: async () => ({ data: null, error: null }),
@@ -76,6 +79,16 @@ function fakeSupabase(): SupabaseClient {
     from: () => builder,
   } as unknown as SupabaseClient;
 }
+
+/** The label sweep (sweepUnlabeledMessages) runs at the end of every tick
+ * and queries inbound_messages through a different chain than the
+ * per-message lookup these stubs were written for. None of these tests is
+ * about the sweep, so it finds nothing to do. */
+const noSweepRows = {
+  not: () => ({
+    is: () => ({ lt: () => ({ order: () => ({ limit: async () => ({ data: [], error: null }) }) }) }),
+  }),
+};
 
 describe("runReplyPollTick", () => {
   it("removes the SPAM label when present, alongside applying the category label", async () => {
@@ -174,6 +187,7 @@ describe("runReplyPollTick", () => {
         if (table === "inbound_messages") {
           return {
             select: () => ({
+              ...noSweepRows,
               eq: () => ({
                 eq: () => ({
                   maybeSingle: async () => ({
@@ -272,6 +286,7 @@ describe("runReplyPollTick", () => {
         if (table === "inbound_messages") {
           return {
             select: () => ({
+              ...noSweepRows,
               eq: () => ({
                 eq: () => ({
                   maybeSingle: async () => ({
@@ -708,5 +723,115 @@ describe("runReplyPollTick departure from a shared mailbox", () => {
 
     expect(writes.some((w) => w.table === "suppression" && w.op === "insert")).toBe(true);
     expect(result.departuresOnRoleAddress).toBe(0);
+  });
+});
+
+describe("label sweep", () => {
+  /** inbound_messages stub whose sweep query returns `stuck`, and which
+   * records what the sweep writes back. */
+  function sweepSupabase(stuck: Record<string, unknown>[]) {
+    const updates: Record<string, unknown>[] = [];
+    const client = {
+      from: (table: string) => {
+        if (table === "connected_accounts") {
+          return {
+            select: () => ({
+              eq: () => ({
+                data: [{ id: "acc-1", email_address: "stone@jaymestone.com", last_history_id: "50" }],
+                error: null,
+              }),
+            }),
+            // The checkpoint advance at the end of the account loop.
+            update: () => ({ eq: async () => ({ data: null, error: null }) }),
+          };
+        }
+        if (table === "inbound_messages") {
+          return {
+            select: () => ({
+              not: () => ({
+                is: () => ({
+                  lt: () => ({ order: () => ({ limit: async () => ({ data: stuck, error: null }) }) }),
+                }),
+              }),
+              eq: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: null }) }) }),
+            }),
+            update: (fields: Record<string, unknown>) => {
+              updates.push(fields);
+              return { eq: async () => ({ data: null, error: null }) };
+            },
+          };
+        }
+        return fakeSupabase().from(table);
+      },
+    } as unknown as SupabaseClient;
+    return { client, updates };
+  }
+
+  const row = (over: Record<string, unknown> = {}) => ({
+    id: "row-stuck",
+    gmail_message_id: "msg-stuck",
+    classification_category: "spam",
+    connected_account_id: "acc-1",
+    ...over,
+  });
+
+  // The gap this closes: a message whose label failed and then aged out of
+  // the history window could never be retried, because retryLabelOnly only
+  // ever runs on messages Gmail re-offers. Six lead-gen rows sat that way
+  // for days regenerating the health alert.
+  it("relabels a message Gmail's history will never offer again", async () => {
+    listNewMessageIds.mockResolvedValueOnce({ messageIds: [], newHistoryId: "100", wasReset: false });
+    fetchGmailMessage.mockResolvedValueOnce(fakeEmail({ labelIds: ["INBOX"] }));
+    const { applyGmailLabel } = await import("@/lib/gmail/labels");
+    vi.mocked(applyGmailLabel).mockClear();
+
+    const { client, updates } = sweepSupabase([row()]);
+    const result = await runReplyPollTick(client);
+
+    expect(applyGmailLabel).toHaveBeenCalledTimes(1);
+    expect(result.labelsRepaired).toBe(1);
+    expect(updates.some((u) => typeof u.label_applied_at === "string")).toBe(true);
+  });
+
+  it("does nothing when no message is stuck", async () => {
+    listNewMessageIds.mockResolvedValueOnce({ messageIds: [], newHistoryId: "100", wasReset: false });
+    const { applyGmailLabel } = await import("@/lib/gmail/labels");
+    vi.mocked(applyGmailLabel).mockClear();
+
+    const { client } = sweepSupabase([]);
+    const result = await runReplyPollTick(client);
+
+    expect(applyGmailLabel).not.toHaveBeenCalled();
+    expect(result.labelsRepaired).toBe(0);
+    expect(result.errors).toEqual([]);
+  });
+
+  // A row whose owning account was disconnected has no mailbox left to
+  // label in; skipping it must not abort the rest of the sweep.
+  it("skips a row whose account is gone without failing the tick", async () => {
+    listNewMessageIds.mockResolvedValueOnce({ messageIds: [], newHistoryId: "100", wasReset: false });
+    const { applyGmailLabel } = await import("@/lib/gmail/labels");
+    vi.mocked(applyGmailLabel).mockClear();
+
+    const { client } = sweepSupabase([row({ connected_account_id: "acc-vanished" })]);
+    const result = await runReplyPollTick(client);
+
+    expect(applyGmailLabel).not.toHaveBeenCalled();
+    expect(result.labelsRepaired).toBe(0);
+    expect(result.errors).toEqual([]);
+  });
+
+  // The sweep is a recovery path -- one unlabelable row must not take down
+  // a tick that already polled and processed real mail.
+  it("reports a failing row as an error rather than throwing", async () => {
+    listNewMessageIds.mockResolvedValueOnce({ messageIds: [], newHistoryId: "100", wasReset: false });
+    fetchGmailMessage.mockRejectedValueOnce(new Error("Gmail rate limit"));
+
+    const { client } = sweepSupabase([row()]);
+    const result = await runReplyPollTick(client);
+
+    expect(result.labelsRepaired).toBe(0);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0].error).toContain("Gmail rate limit");
   });
 });

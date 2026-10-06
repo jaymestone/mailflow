@@ -8,6 +8,7 @@ import { classifyBounce, extractBouncedRecipientCandidates } from "./bounceDetec
 import { matchInboundMessage } from "./matching";
 import { isLeadGenSpam } from "@/lib/conversations/spam";
 import { isRoleAddress } from "./roleAddress";
+import { pauseVenueColleagues, speaksForVenue } from "./venueColleagues";
 import { recordManualSend } from "./recordManualSend";
 import { classifyReply } from "./classify";
 import type { ReplyCategory } from "./types";
@@ -91,6 +92,9 @@ export type ReplyTickResult = {
    * second record — see match.alsoImplicatedContactIds. A non-zero count
    * means the list holds duplicates worth merging by hand. */
   splitRecordsPaused: number;
+  /** Colleagues at the same venue paused because someone there replied
+   * to the same campaign -- see venueColleagues.ts. */
+  venueColleaguesPaused: number;
   errors: { account: string; error: string }[];
   // Populated whenever an account's history checkpoint turned out to be
   // unusable (see wasReset in gmail/history.ts) and a direct-search
@@ -397,6 +401,15 @@ export async function processOneMessage(
         .select("id");
       result.pausedElsewhere += pausedSplit?.length ?? 0;
       result.splitRecordsPaused += pausedSplit?.length ? 1 : 0;
+    }
+
+    // A real reply from anyone at a venue answers for the venue, so the
+    // rest of that campaign's members there stop too. Before the opt_out
+    // delete below, which would leave no venue to read.
+    if (speaksForVenue(category) && match.contactId && match.campaignId) {
+      const n = await pauseVenueColleagues(supabase, match.contactId, match.campaignId);
+      result.venueColleaguesPaused += n;
+      result.pausedElsewhere += n;
     }
 
     // A bounce only suppresses/deletes when it's confirmed hard (see
@@ -775,6 +788,7 @@ export async function runReplyPollTick(supabase: SupabaseClient): Promise<ReplyT
     replies: 0,
     suppressed: 0,
     pausedElsewhere: 0,
+    venueColleaguesPaused: 0,
     removedForReplacement: 0,
     referralsHarvested: 0,
     splitRecordsPaused: 0,

@@ -60,6 +60,7 @@ function freshTickResult(): ReplyTickResult {
     removedForReplacement: 0,
     referralsHarvested: 0,
     splitRecordsPaused: 0,
+    venueColleaguesPaused: 0,
     labelsRepaired: 0,
     errors: [],
     historyResets: [],

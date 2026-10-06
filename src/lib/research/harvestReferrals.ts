@@ -159,7 +159,7 @@ async function venueContextFor(supabase: SupabaseClient, email: string) {
 }
 
 /** Domains where two addresses sharing them implies nothing. */
-export const FREE_MAIL = new Set([
+const FREE_MAIL = new Set([
   "gmail.com",
   "googlemail.com",
   "yahoo.com",

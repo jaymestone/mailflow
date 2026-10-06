@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isSameVenue, speaksForVenue } from "./venueColleagues";
+import { isSameVenue, programsIndependently, speaksForVenue } from "./venueColleagues";
 
 const c = (email: string, venue: string | null, city: string | null = null, state: string | null = null) => ({
   email,
@@ -37,29 +37,31 @@ describe("isSameVenue", () => {
     expect(isSameVenue(c("a@x.org", "Rockport Music", "Rockport", "MA"), c("b@x.org", "Rockport Music"))).toBe(true);
   });
 
-  it("matches an organisational domain in the same city despite different venue names", () => {
+  it("does not treat a shared organisational domain as the same venue", () => {
     expect(
       isSameVenue(
-        c("wurl2@illinois.edu", "Krannert Center for the Performing Arts", "Urbana"),
-        c("vklane2@illinois.edu", "Krannert Center", "Urbana"),
+        c("barneshd@wfu.edu", "Secrest Artists Series", "Winston-Salem"),
+        c("sorianct@wfu.edu", "Wake Forest University", "Winston-Salem"),
       ),
-    ).toBe(true);
-  });
-
-  it("never matches on a shared free-mail domain", () => {
-    expect(
-      isSameVenue(c("a@gmail.com", "Old Sloop Presents", "Rockport"), c("b@gmail.com", "Rockport Music", "Rockport")),
     ).toBe(false);
-  });
-
-  it("does not match a shared domain without a city on both sides", () => {
-    expect(isSameVenue(c("a@umd.edu", "School of Music"), c("b@umd.edu", "Clarice Smith Performing Arts Center"))).toBe(
-      false,
-    );
   });
 
   it("does not match two blank venues", () => {
     expect(isSameVenue(c("a@x.org", null), c("b@y.org", null))).toBe(false);
+  });
+});
+
+describe("programsIndependently", () => {
+  it("is true for Lincoln Center, however the name is spaced or cased", () => {
+    expect(programsIndependently("Lincoln Center for the Performing Arts")).toBe(true);
+    expect(programsIndependently("lincoln center for the performing arts ")).toBe(true);
+  });
+
+  it("is false for other venues, including other Lincoln Centers", () => {
+    expect(programsIndependently("Lincoln Center - Fort Collins")).toBe(false);
+    expect(programsIndependently("Jazz at Lincoln Center")).toBe(false);
+    expect(programsIndependently("Texas A&M")).toBe(false);
+    expect(programsIndependently(null)).toBe(false);
   });
 });
 

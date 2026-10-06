@@ -1,5 +1,4 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { FREE_MAIL } from "@/lib/research/harvestReferrals";
 import type { ReplyCategory } from "./types";
 
 /** Once anyone at a venue has answered a campaign, the venue has answered.
@@ -15,6 +14,12 @@ import type { ReplyCategory } from "./types";
  * Jayme's rule: if someone has replied from a venue, pause the others in
  * that campaign. Pausing, not deleting, so a colleague can be resumed by
  * hand if the reply turns out not to speak for the venue. */
+
+/** Venues whose programmers each run their own series and book
+ * independently, so one reply speaks only for its writer. Lincoln Center
+ * has nine on the list. Add to this as Jayme names more; the name is
+ * compared after normVenue, so spacing, case and punctuation don't matter. */
+const INDEPENDENT_PROGRAMMER_VENUES = ["Lincoln Center for the Performing Arts"];
 
 /** Replies a person actually wrote. Auto-replies, bounces and spam say
  * nothing about the venue, and "unclear" covers "wrong person", which is
@@ -53,29 +58,22 @@ function placesAgree(a: string | null, b: string | null): boolean {
   return !x || !y || x === y;
 }
 
-function domainOf(email: string): string {
-  return email.toLowerCase().split("@")[1] ?? "";
+const INDEPENDENT = new Set(INDEPENDENT_PROGRAMMER_VENUES.map(normVenue));
+
+export function programsIndependently(venue: string | null): boolean {
+  return INDEPENDENT.has(normVenue(venue));
 }
 
-/** Same venue: the same name in the same place, or the same organisational
- * domain in the same city. The place check is what keeps the many
- * "Grand Theatre"s and "Capitol Theatre"s apart. The domain arm catches a
- * university whose rows name the hall differently ("Krannert Center" vs
- * "Krannert Center for the Performing Arts"); it requires a real city on
- * both sides, and never fires on a free-mail domain. */
+/** Same venue: the same name in the same place. The place check is what
+ * keeps the many "Grand Theatre"s and "Capitol Theatre"s apart.
+ *
+ * A shared email domain deliberately does not count. It was tried, and at
+ * a university it pulled in people with nothing to do with the series that
+ * replied: a Wake Forest dance professor was paused because the Secrest
+ * Artists Series said no. */
 export function isSameVenue(a: VenueFields, b: VenueFields): boolean {
   const va = normVenue(a.venue);
-  if (va && va === normVenue(b.venue) && placesAgree(a.city, b.city) && placesAgree(a.state, b.state)) {
-    return true;
-  }
-  const da = domainOf(a.email);
-  return (
-    !!da &&
-    da === domainOf(b.email) &&
-    !FREE_MAIL.has(da) &&
-    !!normPlace(a.city) &&
-    normPlace(a.city) === normPlace(b.city)
-  );
+  return !!va && va === normVenue(b.venue) && placesAgree(a.city, b.city) && placesAgree(a.state, b.state);
 }
 
 /** Pauses every other active member of this campaign at the replying
@@ -91,7 +89,7 @@ export async function pauseVenueColleagues(
     .select("email, venue, city, state")
     .eq("id", contactId)
     .maybeSingle();
-  if (!replier) return 0;
+  if (!replier || programsIndependently(replier.venue)) return 0;
 
   const { data: members } = await supabase
     .from("campaign_members")

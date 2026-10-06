@@ -487,3 +487,166 @@ describe("runConversationBuildTick revision", () => {
     expect(result.changed).toBe(1);
   });
 });
+
+describe("runConversationBuildTick: Jayme's own replies stay on the venue's row", () => {
+  const msg = (over: Record<string, unknown>) => ({
+    id: String(Math.random()),
+    connected_account_id: "acc-1",
+    gmail_thread_id: "t1",
+    in_reply_to: null,
+    references_header: null,
+    subject: "Re: New Roster X Susquehanna Folk",
+    from_email: "director@sfms.org",
+    received_at: "2026-09-20T10:00:00Z",
+    matched_contact_id: null,
+    classification_category: "interested",
+    ...over,
+  });
+  const run = async (inbound: Record<string, unknown>[]) => {
+    const { client, upserted } = fakeSupabase({
+      connected_accounts: [{ id: "acc-1", email_address: "stone@jaymestone.com" }],
+      manual_sends: [],
+      conversations: [],
+      inbound_messages: inbound,
+    });
+    const result = await runConversationBuildTick(client, { now: new Date("2026-10-01T00:00:00Z") });
+    return { upserted, result };
+  };
+
+  it("files his reply, arriving in another of his mailboxes, as his side of the venue's thread", async () => {
+    const { upserted, result } = await run([
+      msg({ references_header: "<root@jaymestone.com>" }),
+      msg({
+        from_email: "stone@jaymestone.com",
+        gmail_thread_id: "t-other-mailbox",
+        references_header: "<root@jaymestone.com> <reply@sfms.org>",
+        received_at: "2026-09-21T10:00:00Z",
+      }),
+    ]);
+
+    expect(upserted).toHaveLength(1);
+    expect(upserted[0].thread_key).toBe("director@sfms.org::new roster x susquehanna folk");
+    expect(upserted[0].last_direction).toBe("outbound");
+    expect(upserted[0].status).toBe("awaiting_them");
+    expect(result.ownRepliesAttached).toBe(1);
+  });
+
+  it("treats addresses at his domains as his even when they are not connected accounts", async () => {
+    const { upserted } = await run([
+      msg({}),
+      msg({ from_email: "admin@jaymestone.com", received_at: "2026-09-21T10:00:00Z" }),
+    ]);
+
+    expect(upserted).toHaveLength(1);
+    expect(upserted[0].thread_key).toBe("director@sfms.org::new roster x susquehanna folk");
+  });
+
+  it("skips a thread with nobody outside his own addresses", async () => {
+    const { upserted, result } = await run([msg({ from_email: "admin@jaymestone.com", subject: "Internal note" })]);
+
+    expect(upserted).toHaveLength(0);
+    expect(result.noExternalSkipped).toBe(1);
+  });
+
+  it("keeps a thread on one row when the venue's server starts tagging the subject", async () => {
+    const { upserted } = await run([
+      msg({ subject: "Re: New Roster X Bo Diddley Plaza", from_email: "h@gainesville.org" }),
+      msg({ subject: "[EXTERNAL] Re: New Roster X Bo Diddley Plaza", from_email: "h@gainesville.org", received_at: "2026-09-22T10:00:00Z" }),
+    ]);
+
+    expect(upserted).toHaveLength(1);
+  });
+
+  it("keeps a colleague answering the same email on the same row, keyed to whoever wrote first", async () => {
+    const { upserted } = await run([
+      msg({ from_email: "rpatsy@erieevents.com", references_header: "<pitch@jaymestone.com>" }),
+      msg({ from_email: "cwesterburg@erieevents.com", references_header: "<pitch@jaymestone.com>", received_at: "2026-09-22T10:00:00Z" }),
+    ]);
+
+    expect(upserted).toHaveLength(1);
+    expect(upserted[0].thread_key).toBe("rpatsy@erieevents.com::new roster x susquehanna folk");
+  });
+
+  it("uses the first Message-ID as the thread id, else the account and Gmail thread", async () => {
+    const withRoot = await run([msg({ references_header: "<Root@JaymeStone.com> <x@y>" })]);
+    expect(withRoot.upserted[0].thread_id).toBe("<root@jaymestone.com>");
+
+    const noHeaders = await run([msg({})]);
+    expect(noHeaders.upserted[0].thread_id).toBe("stone@jaymestone.com:t1");
+  });
+});
+
+describe("runConversationBuildTick: a thread keeps its stored row when its key changes", () => {
+  const stored = (over: Record<string, unknown>) => ({
+    id: "row-1",
+    thread_key: "h@gainesville.org::[external] re: new roster x bo diddley plaza",
+    thread_id: null,
+    gmail_thread_ids: ["t1"],
+    status: "needs_reply",
+    status_override: null,
+    venue: "Bo Diddley Plaza",
+    region: "Southeast",
+    fee_amount: null,
+    revision: 7,
+    is_live: true,
+    last_message_at: "2026-09-20T10:00:00Z",
+    last_direction: "inbound",
+    ...over,
+  });
+  const inbound = {
+    id: "1",
+    connected_account_id: "acc-1",
+    gmail_thread_id: "t1",
+    in_reply_to: null,
+    references_header: "<pitch@jaymestone.com>",
+    subject: "[EXTERNAL] Re: New Roster X Bo Diddley Plaza",
+    from_email: "h@gainesville.org",
+    received_at: "2026-09-20T10:00:00Z",
+    matched_contact_id: null,
+    classification_category: "interested",
+  };
+  const run = async (conversations: Record<string, unknown>[]) => {
+    const { client, upserted } = fakeSupabase({
+      connected_accounts: [{ id: "acc-1", email_address: "stone@jaymestone.com" }],
+      manual_sends: [],
+      conversations,
+      inbound_messages: [inbound],
+    });
+    await runConversationBuildTick(client, { now: new Date("2026-10-01T00:00:00Z") });
+    return upserted;
+  };
+
+  it("finds the stored row by thread id and writes under its key", async () => {
+    const upserted = await run([stored({ thread_id: "<pitch@jaymestone.com>", gmail_thread_ids: [] })]);
+
+    expect(upserted).toHaveLength(1);
+    expect(upserted[0].thread_key).toBe("h@gainesville.org::[external] re: new roster x bo diddley plaza");
+    expect(upserted[0].revision).toBe(7);
+  });
+
+  it("falls back to a stored row sharing a Gmail thread when no thread id is stored yet", async () => {
+    const upserted = await run([stored({})]);
+
+    expect(upserted[0].thread_key).toBe("h@gainesville.org::[external] re: new roster x bo diddley plaza");
+    expect(upserted[0].thread_id).toBe("<pitch@jaymestone.com>");
+  });
+
+  it("prefers the stored row still on the board over a stale one with an archived page", async () => {
+    // Wintergrass: an old row under the clean key went stale; the live
+    // row, with the page Jayme uses, carries the tagged key.
+    const upserted = await run([
+      stored({ id: "old", thread_key: "h@gainesville.org::new roster x bo diddley plaza", is_live: false, revision: 3, gmail_thread_ids: ["t0"] }),
+      stored({}),
+    ]);
+
+    expect(upserted).toHaveLength(1);
+    expect(upserted[0].thread_key).toBe("h@gainesville.org::[external] re: new roster x bo diddley plaza");
+  });
+
+  it("never adopts a stored row keyed to one of Jayme's own addresses", async () => {
+    const upserted = await run([stored({ thread_key: "stone@jaymestone.com::new roster x bo diddley plaza" })]);
+
+    expect(upserted[0].thread_key).toBe("h@gainesville.org::new roster x bo diddley plaza");
+    expect(upserted[0].revision).toBe(1);
+  });
+});

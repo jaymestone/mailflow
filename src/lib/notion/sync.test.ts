@@ -88,3 +88,47 @@ describe("syncConversationsToNotion", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
+
+describe("syncConversationsToNotion: what each push writes", () => {
+  function fakeWithUpdates(rows: Record<string, unknown>[]) {
+    const builder: Record<string, unknown> = {
+      select: () => builder,
+      order: () => builder,
+      limit: () => Promise.resolve({ data: rows, error: null }),
+      update: () => ({ eq: () => Promise.resolve({ error: null }) }),
+    };
+    return { from: () => builder } as unknown as SupabaseClient;
+  }
+
+  async function bodiesFor(row: Record<string, unknown>) {
+    fetchSpy.mockReset();
+    fetchSpy.mockImplementation(async () => new Response(JSON.stringify({ id: "page-new" }), { status: 200 }));
+    await syncConversationsToNotion(fakeWithUpdates([row]), { databaseId: "db", token: "t" });
+    return fetchSpy.mock.calls.map(([, init]) => JSON.parse(String((init as RequestInit).body)));
+  }
+
+  it("never rewrites Venue on an existing row, since Jayme renames rows by hand", async () => {
+    const [body] = await bodiesFor({ ...pendingRow("a"), thread_id: "<root@x>" });
+
+    expect(body.properties.Venue).toBeUndefined();
+    expect(body.properties["Thread ID"].rich_text[0].text.content).toBe("<root@x>");
+  });
+
+  it("sets Venue and Thread ID when it creates a row", async () => {
+    const [body] = await bodiesFor({ ...pendingRow("b"), notion_page_id: null, thread_id: "<root@y>" });
+
+    expect(body.properties.Venue.title[0].text.content).toBe("The Barn");
+    expect(body.properties["Thread ID"].rich_text[0].text.content).toBe("<root@y>");
+  });
+});
+
+describe("initialVenueTitle", () => {
+  it("prefers the catalogue venue, then the roster subject, then the contact", async () => {
+    const { initialVenueTitle } = await import("./sync");
+    expect(initialVenueTitle({ venue: "The Barn", thread_key: "a@b.org::new roster x somewhere" })).toBe("The Barn");
+    expect(initialVenueTitle({ venue: null, thread_key: "a@b.org::new roster x tassel performing arts center" })).toBe(
+      "Tassel Performing Arts Center",
+    );
+    expect(initialVenueTitle({ venue: null, thread_key: "a@b.org::following up" })).toBe("a@b.org");
+  });
+});

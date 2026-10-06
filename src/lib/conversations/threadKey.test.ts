@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeSubject, pickCounterpart, threadKeyFor } from "./threadKey";
+import { normalizeSubject, pickCounterpart, threadRootId, threadKeyFor } from "./threadKey";
 
 describe("normalizeSubject", () => {
   it("strips a reply prefix", () => {
@@ -23,6 +23,20 @@ describe("normalizeSubject", () => {
 
   it("collapses rewrapped whitespace", () => {
     expect(normalizeSubject("New Roster   X\n  Bluebird")).toBe("new roster x bluebird");
+  });
+
+  it("strips the tags venues' mail servers add, in any order with reply prefixes", () => {
+    for (const s of [
+      "[EXTERNAL] Re: New Roster X Bo Diddley Plaza",
+      "[External]:Re: New Roster X Bo Diddley Plaza",
+      "[external]re: New Roster X Bo Diddley Plaza",
+      "***SPAM*** Fwd: FW: New Roster X Bo Diddley Plaza",
+      "[spam] Re: New Roster X Bo Diddley Plaza",
+      "Re: **EXT** Re: New Roster X Bo Diddley Plaza",
+      "[Use caution when clicking links - 109] RE: New Roster X Bo Diddley Plaza",
+    ]) {
+      expect(normalizeSubject(s), s).toBe("new roster x bo diddley plaza");
+    }
   });
 
   it("does not strip a subject that merely starts with those letters", () => {
@@ -72,13 +86,37 @@ describe("pickCounterpart", () => {
     expect(pickCounterpart(["Stone@JaymeStone.com", "booker@venue.org"], own)).toBe("booker@venue.org");
   });
 
-  it("falls back to the first address when every participant is ours", () => {
-    // An internal forward. Returning null would collapse every such
-    // thread into a single conversation row.
-    expect(pickCounterpart(["stone@jaymestone.com", "agency@jaymestone.com"], own)).toBe("stone@jaymestone.com");
+  it("returns null when every participant is ours", () => {
+    expect(pickCounterpart(["stone@jaymestone.com", "agency@jaymestone.com"], own)).toBeNull();
+  });
+
+  it("treats any address at Jayme's domains as his, connected or not", () => {
+    expect(pickCounterpart(["admin@jaymestone.com", "j@jaymestoneagency.com", "booker@venue.org"], own)).toBe(
+      "booker@venue.org",
+    );
+    expect(pickCounterpart(["admin@jaymestone.com"], own)).toBeNull();
+  });
+
+  it("takes the first outside participant, oldest message first", () => {
+    expect(pickCounterpart(["a@venue.org", "b@venue.org"], own)).toBe("a@venue.org");
   });
 
   it("returns null when there is nothing to pick", () => {
     expect(pickCounterpart([], own)).toBeNull();
+  });
+});
+
+describe("threadRootId", () => {
+  it("takes the first Message-ID in References, lowercased", () => {
+    expect(threadRootId("<Root@mail.gmail.com> <second@x.com>", "<second@x.com>")).toBe("<root@mail.gmail.com>");
+  });
+
+  it("falls back to In-Reply-To when References is missing", () => {
+    expect(threadRootId(null, "<only@x.com>")).toBe("<only@x.com>");
+  });
+
+  it("returns null when neither header has a Message-ID", () => {
+    expect(threadRootId("", null)).toBeNull();
+    expect(threadRootId("garbage", "also garbage")).toBeNull();
   });
 });

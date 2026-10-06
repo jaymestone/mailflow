@@ -23,8 +23,14 @@
 
 /** Strips any run of reply/forward prefixes, in the several forms mail
  * clients produce, including the localised ones that turn up in European
- * venues' replies. */
-const REPLY_PREFIX = /^(?:\s*(?:re|fwd?|aw|sv|vs|rif|antw|res)\s*(?:\[\d+\])?\s*:\s*)+/i;
+ * venues' replies -- and the tags a venue's mail server stamps in front of
+ * them: "[EXTERNAL]", "[spam]", "***SPAM***", "**EXT**", "[Use caution
+ * when clicking links - 109]". Those arrive mid-thread, so leaving them in
+ * gave the same conversation a second key and a second row on the board;
+ * 16 rows carried one. They can come in any order with the reply prefixes
+ * ("***SPAM*** Fwd: FW:", "[External]:Re:"), hence one alternation. */
+const REPLY_PREFIX =
+  /^(?:\s*(?:(?:re|fwd?|aw|sv|vs|rif|antw|res)\s*(?:\[\d+\])?\s*:|\[[^\]]*\]\s*:?|\*{1,3}[^*]+\*{1,3}\s*:?)\s*)+/i;
 
 export function normalizeSubject(subject: string | null | undefined): string {
   if (!subject) return "";
@@ -44,13 +50,40 @@ export function threadKeyFor(counterpartEmail: string, subject: string | null | 
   return `${counterpartEmail.trim().toLowerCase()}::${normalizeSubject(subject)}`;
 }
 
-/** Picks the counterpart from a thread's participants.
+/** Jayme's mail domains. Every address at these is his, connected to
+ * Mailflow or not -- admin@ and jayme@jaymestone.com are not connected
+ * accounts, yet both turn up in threads. */
+const OWN_DOMAINS = ["jaymestone.com", "jaymestoneagency.com"];
+
+export function isOwnAddress(email: string | null | undefined, ownAddresses: Set<string>): boolean {
+  if (!email) return false;
+  const e = email.trim().toLowerCase();
+  return ownAddresses.has(e) || OWN_DOMAINS.includes(e.split("@")[1] ?? "");
+}
+
+/** Picks the counterpart from a thread's participants: the first one,
+ * oldest message first, who is not Jayme.
  *
- * Falls back to the first address seen when every participant is one of
- * ours -- that happens on internal forwards, and returning an empty key
- * there would collapse all such threads into one row.
+ * Returns null when every participant is his. That used to fall back to
+ * his own address, which is how 11 rows on the board ended up keyed to
+ * stone@ or admin@ -- his reply, landing in another of his mailboxes, was
+ * filed as a conversation with himself rather than as his side of the
+ * venue's. A thread with no outside participant is not a booking
+ * conversation, so it is skipped.
  */
 export function pickCounterpart(participants: string[], ownAddresses: Set<string>): string | null {
-  const external = participants.find((p) => p && !ownAddresses.has(p.toLowerCase()));
-  return external ?? participants.find((p) => Boolean(p)) ?? null;
+  return participants.find((p) => p && !isOwnAddress(p, ownAddresses)) ?? null;
+}
+
+/** A stable identity for the thread a message belongs to: the Message-ID
+ * of the thread's first message.
+ *
+ * Gmail thread ids are per mailbox, and Jayme's conversations routinely
+ * span several of his. The first Message-ID is the same in all of them:
+ * every reply's References header starts with it (RFC 5322 3.6.4), and a
+ * reply to a campaign email carries that email's own Message-ID there.
+ * In-Reply-To is the fallback for a client that drops References. */
+export function threadRootId(references: string | null | undefined, inReplyTo: string | null | undefined): string | null {
+  const first = (references ?? "").match(/<[^<>\s]+>/)?.[0] ?? (inReplyTo ?? "").match(/<[^<>\s]+>/)?.[0];
+  return first ? first.toLowerCase() : null;
 }

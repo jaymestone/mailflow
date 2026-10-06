@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createHash } from "crypto";
 import { isLeadGenSpam } from "./spam";
-import { normalizeSubject, pickCounterpart, threadKeyFor } from "./threadKey";
+import { isOwnAddress, normalizeSubject, pickCounterpart, threadKeyFor, threadRootId } from "./threadKey";
 import { computeIsLive, computeStatus, type ConversationStatus } from "./status";
 import { regionFor } from "./region";
 
@@ -22,7 +22,10 @@ import { regionFor } from "./region";
 const PAGE = 1000;
 
 type InboundRow = {
+  connected_account_id: string | null;
   gmail_thread_id: string | null;
+  in_reply_to: string | null;
+  references_header: string | null;
   subject: string | null;
   from_email: string | null;
   received_at: string;
@@ -49,6 +52,13 @@ export type ConversationBuildResult = {
    * to do -- which is the signal that was unreadable while every row was
    * bumped on every pass. */
   changed: number;
+  /** Messages from one of Jayme's own addresses, filed as his side of the
+   * venue's conversation instead of a conversation of their own. */
+  ownRepliesAttached: number;
+  /** Threads with nobody outside Jayme's own addresses -- skipped. */
+  noExternalSkipped: number;
+  /** Set only on a dry run: the rows that would have been written. */
+  preview?: Record<string, unknown>[];
 };
 
 /** PostgREST caps a response at 1000 rows regardless of the limit asked
@@ -75,19 +85,23 @@ async function readAll<T>(
 
 export async function runConversationBuildTick(
   supabase: SupabaseClient,
-  opts: { now?: Date } = {},
+  opts: { now?: Date; dryRun?: boolean } = {},
 ): Promise<ConversationBuildResult> {
   const now = opts.now ?? new Date();
 
-  const { data: accounts } = await supabase.from("connected_accounts").select("email_address");
+  const { data: accounts } = await supabase.from("connected_accounts").select("id, email_address");
   const ownAddresses = new Set((accounts ?? []).map((a: { email_address: string }) => a.email_address.toLowerCase()));
+  const accountEmail = new Map((accounts ?? []).map((a: { id: string; email_address: string }) => [a.id, a.email_address]));
 
   const inbound = await readAll<InboundRow>(
     supabase,
     "inbound_messages",
-    "id, gmail_thread_id, subject, from_email, received_at, matched_contact_id, classification_category",
+    "id, connected_account_id, gmail_thread_id, in_reply_to, references_header, subject, from_email, received_at, matched_contact_id, classification_category",
     ["interested", "follow_up"],
   );
+  // Oldest first, so the first outside participant a thread meets -- the
+  // one its key and contact are taken from -- is the person who started it.
+  inbound.sort((a, b) => a.received_at.localeCompare(b.received_at));
 
   const manual = await readAll<ManualRow>(supabase, "manual_sends", "id, gmail_thread_id, subject, from_email, sent_at");
 
@@ -110,10 +124,16 @@ export async function runConversationBuildTick(
     updated: 0,
     droppedStale: 0,
     changed: 0,
+    ownRepliesAttached: 0,
+    noExternalSkipped: 0,
   };
 
   type Agg = {
     threadKey: string;
+    /** The thread's first Message-ID (see threadRootId), or
+     * "<account>:<gmail thread id>" when a message carries none. Written to
+     * Notion as Thread ID. */
+    threadId: string;
     threadIds: Set<string>;
     counterpart: string;
     subject: string | null;
@@ -125,11 +145,12 @@ export async function runConversationBuildTick(
   };
   const byKey = new Map<string, Agg>();
 
-  function agg(key: string, counterpart: string, subject: string | null): Agg {
+  function agg(key: string, counterpart: string, subject: string | null, threadId: string): Agg {
     let a = byKey.get(key);
     if (!a) {
       a = {
         threadKey: key,
+        threadId,
         threadIds: new Set(),
         counterpart,
         subject,
@@ -144,6 +165,13 @@ export async function runConversationBuildTick(
     return a;
   }
 
+  // A thread's first Message-ID is the same in every mailbox, so it is
+  // tried before the who-plus-subject key: it is what holds a thread
+  // together when a colleague answers it, or when the subject picks up a
+  // tag the normaliser has never seen.
+  const byRoot = new Map<string, Agg>();
+  const ownInbound: InboundRow[] = [];
+
   for (const m of inbound) {
     result.inboundConsidered++;
     // Belt and braces: the reply tick now classifies this as 'spam' before
@@ -153,10 +181,20 @@ export async function runConversationBuildTick(
       result.spamSkipped++;
       continue;
     }
+    // Jayme's own mail, picked up in another of his mailboxes. It is his
+    // reply, so it belongs on the venue's row as his side of the thread --
+    // attached below alongside manual_sends -- never as a row of its own.
+    if (isOwnAddress(m.from_email, ownAddresses)) {
+      ownInbound.push(m);
+      continue;
+    }
     const counterpart = pickCounterpart([m.from_email ?? ""], ownAddresses);
     if (!counterpart) continue;
+    const root = threadRootId(m.references_header, m.in_reply_to);
     const key = threadKeyFor(counterpart, m.subject);
-    const a = agg(key, counterpart, m.subject);
+    const fallbackId = `${accountEmail.get(m.connected_account_id ?? "") ?? m.connected_account_id ?? "unknown"}:${m.gmail_thread_id}`;
+    const a = (root ? byRoot.get(root) : undefined) ?? agg(key, counterpart, m.subject, root ?? fallbackId);
+    if (root && !byRoot.has(root)) byRoot.set(root, a);
     if (m.gmail_thread_id) a.threadIds.add(m.gmail_thread_id);
     if (m.matched_contact_id && !a.contactId) a.contactId = m.matched_contact_id;
     if (!a.firstInboundAt || m.received_at < a.firstInboundAt) a.firstInboundAt = m.received_at;
@@ -179,22 +217,44 @@ export async function runConversationBuildTick(
     if (subj && !bySubject.has(subj)) bySubject.set(subj, a);
   }
 
-  for (const s of manual) {
+  // His replies: manual_sends (mail he sent from a connected account) and
+  // his own messages that arrived as inbound. Thread root first for the
+  // latter, then Gmail thread id, then subject.
+  const replies = [
+    ...manual.map((s) => ({ root: null as string | null, threadId: s.gmail_thread_id, subject: s.subject, at: s.sent_at, own: false })),
+    ...ownInbound.map((m) => ({
+      root: threadRootId(m.references_header, m.in_reply_to),
+      threadId: m.gmail_thread_id,
+      subject: m.subject,
+      at: m.received_at,
+      own: true,
+    })),
+  ];
+  for (const r of replies) {
     const a =
-      (s.gmail_thread_id ? byThreadId.get(s.gmail_thread_id) : undefined) ??
-      bySubject.get(normalizeSubject(s.subject));
-    if (!a) continue; // a reply in a thread that isn't a booking conversation
-    if (s.gmail_thread_id) {
-      a.threadIds.add(s.gmail_thread_id);
-      byThreadId.set(s.gmail_thread_id, a);
+      (r.root ? byRoot.get(r.root) : undefined) ??
+      (r.threadId ? byThreadId.get(r.threadId) : undefined) ??
+      bySubject.get(normalizeSubject(r.subject));
+    if (!a) {
+      // A reply in a thread that isn't a booking conversation -- or, for
+      // his own inbound mail, one with no outside participant at all.
+      if (r.own) result.noExternalSkipped++;
+      continue;
     }
-    if (!a.lastOutboundAt || s.sent_at > a.lastOutboundAt) a.lastOutboundAt = s.sent_at;
-    a.messageIds.push(`o:${s.gmail_thread_id}:${s.sent_at}`);
+    if (r.own) result.ownRepliesAttached++;
+    if (r.threadId) {
+      a.threadIds.add(r.threadId);
+      byThreadId.set(r.threadId, a);
+    }
+    if (!a.lastOutboundAt || r.at > a.lastOutboundAt) a.lastOutboundAt = r.at;
+    a.messageIds.push(`o:${r.threadId}:${r.at}`);
   }
 
-  const existing = await readAll<{
+  type Existing = {
     id: string;
     thread_key: string;
+    thread_id: string | null;
+    gmail_thread_ids: string[] | null;
     status: ConversationStatus;
     status_override: ConversationStatus | null;
     venue: string | null;
@@ -204,17 +264,70 @@ export async function runConversationBuildTick(
     is_live: boolean;
     last_message_at: string | null;
     last_direction: "inbound" | "outbound" | null;
-  }>(
-    supabase,
-    "conversations",
-    "id, thread_key, status, status_override, venue, region, fee_amount, revision, is_live, last_message_at, last_direction",
-  );
+  };
+  const EXISTING_COLUMNS =
+    "id, thread_key, gmail_thread_ids, status, status_override, venue, region, fee_amount, revision, is_live, last_message_at, last_direction";
+  let existing: Existing[];
+  try {
+    existing = await readAll<Existing>(supabase, "conversations", `${EXISTING_COLUMNS}, thread_id`);
+  } catch (err) {
+    // Only a dry run may proceed without the column: it is how the
+    // backfill report gets produced before migration 40 has been applied.
+    if (!opts.dryRun || !String(err).includes("thread_id")) throw err;
+    existing = (await readAll<Existing>(supabase, "conversations", EXISTING_COLUMNS)).map((e) => ({ ...e, thread_id: null }));
+  }
+
+  // Which stored row each conversation is. Thread id first, then the key,
+  // so a thread whose key has changed -- a subject that picked up a tag,
+  // or a colleague who wrote first -- keeps its row and therefore its
+  // Notion page, where Jayme's notes and ticks live. Matching on the new
+  // key alone would mint a second page and strand the first.
+  //
+  // Rows written before thread_id existed carry none, so the last resort
+  // is a stored row sharing one of the conversation's Gmail threads. A row
+  // keyed to one of Jayme's own addresses is never adopted that way: it
+  // is a duplicate the old keying created, not the venue's row.
+  const existingByThreadId = new Map(existing.filter((e) => e.thread_id).map((e) => [e.thread_id as string, e]));
   const existingByKey = new Map(existing.map((e) => [e.thread_key, e]));
+  const existingByGmail = new Map<string, Existing[]>();
+  for (const e of existing) {
+    for (const g of e.gmail_thread_ids ?? []) existingByGmail.set(g, [...(existingByGmail.get(g) ?? []), e]);
+  }
+  const claimed = new Set<string>();
+  const priorOf = new Map<Agg, Existing>();
+  const naturalKeys = new Set(byKey.keys());
+  for (const a of byKey.values()) {
+    const byId = existingByThreadId.get(a.threadId);
+    const overlapping = [...a.threadIds]
+      .flatMap((g) => existingByGmail.get(g) ?? [])
+      .filter((e) => !isOwnAddress(e.thread_key.split("::")[0], ownAddresses));
+    const candidates = [byId, existingByKey.get(a.threadKey), ...overlapping].filter(
+      (e): e is Existing =>
+        !!e &&
+        !claimed.has(e.id) &&
+        // Writing under another conversation's own key would put two rows
+        // of one batch on a single key, which the upsert rejects.
+        (e.thread_key === a.threadKey || !naturalKeys.has(e.thread_key)),
+    );
+    // Several stored rows can belong to one conversation -- that is the
+    // duplication being fixed. Prefer the one still on the board: an
+    // earlier row that went stale has an archived Notion page, and
+    // adopting it would strand the live page and push to a dead one
+    // (Wintergrass had exactly this pair).
+    const p = candidates.find((e) => e.is_live) ?? candidates[0];
+    if (p) {
+      priorOf.set(a, p);
+      claimed.add(p.id);
+    }
+  }
+  // Adopting a stored row means writing under its key, since thread_key is
+  // what the upsert lands on.
+  for (const [a, p] of priorOf) a.threadKey = p.thread_key;
 
   const rows: Record<string, unknown>[] = [];
   for (const a of byKey.values()) {
     result.conversations++;
-    const prior = existingByKey.get(a.threadKey);
+    const prior = priorOf.get(a);
 
     const lastInbound = a.lastInboundAt;
     const lastOutbound = a.lastOutboundAt;
@@ -287,6 +400,7 @@ export async function runConversationBuildTick(
 
     rows.push({
       thread_key: a.threadKey,
+      thread_id: a.threadId,
       venue,
       region,
       gmail_thread_ids: [...a.threadIds],
@@ -302,6 +416,11 @@ export async function runConversationBuildTick(
       revision: unchanged ? prior.revision : (prior?.revision ?? 0) + 1,
       updated_at: now.toISOString(),
     });
+  }
+
+  if (opts.dryRun) {
+    result.preview = rows;
+    return result;
   }
 
   for (let i = 0; i < rows.length; i += 200) {

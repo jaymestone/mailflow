@@ -49,6 +49,7 @@ const REGION_OPTIONS = new Set([
 export type ConversationForSync = {
   id: string;
   thread_key: string;
+  thread_id: string | null;
   venue: string | null;
   artist: string | null;
   region: string | null;
@@ -84,9 +85,20 @@ function selectOrNull(value: string | null, allowed: Set<string>) {
   return { select: value && allowed.has(value) ? { name: value } : null };
 }
 
-function propertiesFor(c: ConversationForSync) {
+/** The title a new row starts with: the catalogue venue name, else the
+ * venue named in a "New Roster X {venue}" subject, else the contact. */
+export function initialVenueTitle(c: Pick<ConversationForSync, "venue" | "thread_key">): string {
+  const [contact, subject = ""] = c.thread_key.split("::");
+  const fromSubject = subject.match(/^new roster x (.+)$/)?.[1]?.replace(/\b\w/g, (ch) => ch.toUpperCase());
+  return (c.venue || fromSubject || contact || "Unknown").slice(0, 1900);
+}
+
+/** Venue is set once, when the row is created, and never again: Jayme
+ * renames rows by hand, and rewriting the title on every push undid that
+ * within fifteen minutes. */
+function propertiesFor(c: ConversationForSync, mode: "create" | "update") {
   return {
-    Venue: { title: [{ text: { content: (c.venue || c.thread_key.split("::")[0] || "Unknown").slice(0, 1900) } }] },
+    ...(mode === "create" ? { Venue: { title: [{ text: { content: initialVenueTitle(c) } }] } } : {}),
     Status: { select: { name: STATUS_LABELS[c.status] ?? "Needs reply" } },
     "Waiting on": { select: c.last_direction ? { name: c.last_direction === "outbound" ? "Them" : "You" } : null },
     Artist: selectOrNull(c.artist, ARTIST_OPTIONS),
@@ -97,6 +109,7 @@ function propertiesFor(c: ConversationForSync) {
     "Last contact": { date: c.last_message_at ? { start: c.last_message_at.slice(0, 10) } : null },
     Contact: { email: c.thread_key.split("::")[0] || null },
     "Mailflow key": text(c.thread_key),
+    "Thread ID": text(c.thread_id),
   };
 }
 
@@ -154,7 +167,7 @@ export async function syncConversationsToNotion(
   const { data, error } = await supabase
     .from("conversations")
     .select(
-      "id, thread_key, venue, artist, region, status, fee_amount, gist, next_action, last_message_at, last_direction, is_live, revision, notion_page_id, notion_synced_revision",
+      "id, thread_key, thread_id, venue, artist, region, status, fee_amount, gist, next_action, last_message_at, last_direction, is_live, revision, notion_page_id, notion_synced_revision",
     )
     .order("last_message_at", { ascending: false, nullsFirst: false })
     .limit(1000);
@@ -191,7 +204,7 @@ export async function syncConversationsToNotion(
         await notion(`/pages/${row.notion_page_id}`, {
           token: opts.token,
           method: "PATCH",
-          body: JSON.stringify({ properties: propertiesFor(row) }),
+          body: JSON.stringify({ properties: propertiesFor(row, "update") }),
         });
         result.updated++;
       } else {
@@ -200,7 +213,7 @@ export async function syncConversationsToNotion(
           method: "POST",
           body: JSON.stringify({
             parent: { database_id: opts.databaseId },
-            properties: propertiesFor(row),
+            properties: propertiesFor(row, "create"),
           }),
         });
         await supabase.from("conversations").update({ notion_page_id: created.id as string }).eq("id", row.id);

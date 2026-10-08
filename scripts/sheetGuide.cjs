@@ -35,7 +35,7 @@ const S=[
   ["bar","COLORS AND SYMBOLS"],
   ["swatch","Confirmed","Booked.",C(...G)],
   ["row","Hold · Inquiry · Prospective","Date held · date asked about or offered · interested, no date."],
-  ["swatch","Faded","The show already happened (artist tabs).",C(0.97,0.97,0.97)],
+  ["swatch","Faded","The show already happened (Master and the artist tabs).",C(0.97,0.97,0.97)],
   ["swatch","If routing nearby","Only interested if an artist is in their area.",C(0.8,0.92,0.8)],
   ["swatch","Date on the table","A specific date has come up.",C(0.8,0.88,0.98)],
   ["swatch","Talk later","Reconnect at a set time, e.g. January.",C(0.99,0.92,0.75)],

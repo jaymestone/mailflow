@@ -5,7 +5,6 @@ import {
   eachDay,
   fmtDay,
   fmtRange,
-  money,
   placeLead,
   readBookings,
   refreshNote,
@@ -48,7 +47,16 @@ const INTEREST_LABEL: Record<string, string> = {
   general_roster: "General roster interest",
   talk_later: "Talk later",
 };
-const LEADS_HEADER = ["Region", "City", "State", "Venue", "Interest", "Timing", "Fee", "Contact", "Where it stands", "Next step", "Last contact", "Email", "Bring into", "id"];
+const LEADS_HEADER = ["Venue", "City", "Interest", "Timing", "Near a booked date", "Contact", "Where it stands", "Next step", "Last contact", "Email", "Bring into", "id"];
+const PICK_COL = 10; // "Bring into", K
+const ID_COL = 11; // hidden conversation id, L
+const INTEREST_COLOR: Record<string, { red: number; green: number; blue: number }> = {
+  if_routing: { red: 0.8, green: 0.92, blue: 0.8 },
+  specific_date: { red: 0.8, green: 0.88, blue: 0.98 },
+  artist_no_date: { red: 0.89, green: 0.85, blue: 0.96 },
+  talk_later: { red: 0.99, green: 0.92, blue: 0.75 },
+  general_roster: { red: 0.93, green: 0.93, blue: 0.93 },
+};
 const ROUTING_HEADER = ["Interested venue nearby", "City", "Miles", "Interest", "Contact", "Where it stands", "Email"];
 /** One light colour per artist for the Routing section bars, so where one
  * artist's dates end and the next begin is visible at a glance. */
@@ -98,6 +106,13 @@ type Conv = {
 type Contact = { id: string; first_name: string | null; last_name: string | null; email: string; venue: string | null; city: string | null; state: string | null; lat: number | null; lng: number | null };
 type Coord = { lat: number; lng: number };
 
+/** A run's dates without weekdays: "Mar 17", "May 21–23", "Apr 30–May 2". */
+export function compactRange(start: string, end: string): string {
+  const md = (iso: string) => new Date(iso + "T12:00:00Z").toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+  if (start === end) return md(start);
+  return start.slice(0, 7) === end.slice(0, 7) ? `${md(start)}–${Number(end.slice(8, 10))}` : `${md(start)}–${md(end)}`;
+}
+
 /** Open days without weekdays, grouped by month: "Apr 13, 14, 15 · May 1, 2". */
 export function compactDays(isos: string[]): string {
   const byMonth = new Map<string, number[]>();
@@ -141,7 +156,7 @@ export async function runWorkbookTick(supabase: SupabaseClient, opts: { now?: Da
   // Formatted for Master and Leads (text as Jayme sees it), unformatted for
   // the workbooks so column A comes back as date serials.
   const [[masterRows, leadPicks], grids] = await Promise.all([
-    batchGet(SHEET, ["Master!A2:G3000", "Leads!M2:N2000"]),
+    batchGet(SHEET, ["Master!A2:G3000", "Leads!K2:L3000"]),
     batchGet(SHEET, targets.map((t) => `'${t.tab}'!A1:J1000`), "UNFORMATTED_VALUE"),
   ]);
   const bookings = readBookings(masterRows);
@@ -253,32 +268,6 @@ export async function runWorkbookTick(supabase: SupabaseClient, opts: { now?: Da
     if (error) result.errors.push(`${v.c.thread_key.slice(0, 40)}: ${error.message}`);
   }
 
-  // ---- 3a. Leads: interest with no artist yet -------------------------------
-  const order = ["if_routing", "specific_date", "artist_no_date", "talk_later", "general_roster"];
-  const leads = view
-    .filter((v) => !v.lead.artists.length)
-    .sort(
-      (a, b) =>
-        (a.c.region ?? "zz").localeCompare(b.c.region ?? "zz") ||
-        a.lead.state.localeCompare(b.lead.state) ||
-        a.lead.city.localeCompare(b.lead.city) ||
-        order.indexOf(a.lead.interest) - order.indexOf(b.lead.interest),
-    );
-  const leadText = leads.map((v) => [
-    v.c.region ?? "",
-    v.lead.city,
-    v.lead.state,
-    v.lead.venue,
-    INTEREST_LABEL[v.lead.interest] ?? v.lead.interest,
-    [v.lead.routingArea ? `Near ${v.lead.routingArea}` : "", ...v.lead.dates.map(fmtRange), v.lead.window ?? ""].filter(Boolean).join(" · "),
-    money(v.c.fee_amount),
-    [v.contactName, v.email].filter(Boolean).join(" · "),
-    v.lead.note,
-    v.lead.nextStep ?? "",
-    (v.c.last_message_at ?? "").slice(0, 10),
-  ]);
-  result.leads = leads.length;
-
   // ---- 3b. Routing: interested venues near every date on a calendar ---------
   // Laid out in blocks, one per date on an artist's calendar: a coloured bar
   // naming the stop and its open days, the interested venues under it, then
@@ -289,6 +278,8 @@ export async function runWorkbookTick(supabase: SupabaseClient, opts: { now?: Da
   type Segment = { text: string; style: "artist" | "dates" | "venue" | "status" | "city" | "sep" | "open" };
   const bars: { row: number; artist: string; segments: Segment[] }[] = [];
   const routingHot: number[] = []; // rows whose venue said "if you're routing nearby"
+  // Every run on every calendar, for the Leads tab's "Near a booked date".
+  const runIndex: { artist: string; when: string; coords: Coord[] }[] = [];
   for (const [artist, wb] of books) {
     type Day = { venue: string; status: string; city: string; state: string };
     const cal = new Map<string, Day>();
@@ -346,6 +337,7 @@ export async function runWorkbookTick(supabase: SupabaseClient, opts: { now?: Da
             a.d - b.d,
         )
         .slice(0, MAX_PER_ANCHOR);
+      runIndex.push({ artist, when: compactRange(isos[i], isos[j]), coords: run.map((st) => st.where) });
       if (!near.length) continue;
       const when = i === j ? fmtDay(isos[i]) : `${fmtDay(isos[i])} – ${fmtDay(isos[j])}`;
       // Each piece in its own style (see the bar formatting below): artist,
@@ -386,15 +378,74 @@ export async function runWorkbookTick(supabase: SupabaseClient, opts: { now?: Da
     }
   }
 
+  // ---- 3b. Leads: interest with no artist yet, by region ----------------------
+  // Sections per region with a summary bar, the "if routing" venues first,
+  // and for each venue the nearest dates already on any artist's calendar --
+  // the connection Jayme would otherwise have to work out in his head.
+  const order = ["if_routing", "specific_date", "artist_no_date", "talk_later", "general_roster"];
+  const leads = view
+    .filter((v) => !v.lead.artists.length)
+    .sort(
+      (a, b) =>
+        (a.c.region ?? "zz").localeCompare(b.c.region ?? "zz") ||
+        order.indexOf(a.lead.interest) - order.indexOf(b.lead.interest) ||
+        a.lead.state.localeCompare(b.lead.state) ||
+        a.lead.city.localeCompare(b.lead.city),
+    );
+  result.leads = leads.length;
+  const leadRows: Cell[][] = [];
+  const leadLinks: Cell[][] = [];
+  const leadIds: Cell[][] = [];
+  const regionBars: { row: number; text: string; split: number }[] = [];
+  const leadRowAt: { row: number; interest: string }[] = [];
+  for (const region of [...new Set(leads.map((v) => v.c.region ?? "Other"))]) {
+    const group = leads.filter((v) => (v.c.region ?? "Other") === region);
+    const count = (k: string) => group.filter((v) => v.lead.interest === k).length;
+    const tally = [`${group.length} venue${group.length === 1 ? "" : "s"}`, ...order.filter((k) => count(k)).map((k) => `${count(k)} ${(INTEREST_LABEL[k] ?? k).toLowerCase()}`)].join(" · ");
+    const title = region.toUpperCase();
+    regionBars.push({ row: leadRows.length + 2, text: `${title}   ${tally}`, split: title.length });
+    leadRows.push([""]);
+    leadLinks.push([""]);
+    leadIds.push([""]);
+    for (const v of group) {
+      const near = v.coord
+        ? runIndex
+            .map((r) => ({ r, d: Math.min(...r.coords.map((c) => miles(c, v.coord!))) }))
+            .filter((n) => n.d <= RADIUS_MILES)
+            .sort((a, b) => a.d - b.d)
+            .slice(0, 2)
+            .map((n) => `${n.r.artist} · ${n.r.when} · ${Math.round(n.d)} mi`)
+            .join("\n")
+        : "";
+      leadRowAt.push({ row: leadRows.length + 2, interest: v.lead.interest });
+      leadRows.push([
+        v.lead.venue,
+        [v.lead.city, v.lead.state].filter(Boolean).join(", "),
+        INTEREST_LABEL[v.lead.interest] ?? v.lead.interest,
+        [v.lead.routingArea ? `Near ${v.lead.routingArea}` : "", ...v.lead.dates.map(fmtRange), v.lead.window ?? ""].filter(Boolean).join(" · "),
+        near,
+        [v.contactName, v.email].filter(Boolean).join("\n"),
+        v.lead.note,
+        v.lead.nextStep ?? "",
+        (v.c.last_message_at ?? "").slice(0, 10),
+      ]);
+      leadLinks.push([v.link ? `=HYPERLINK("${v.link}","Open email")` : ""]);
+      leadIds.push([v.c.id]);
+    }
+    leadRows.push([""]);
+    leadLinks.push([""]);
+    leadIds.push([""]);
+  }
+
   // ---- Write Leads and Routing ----------------------------------------------
   // RAW, not USER_ENTERED: Sheets otherwise reads "Fri, May 21" as a date in
   // the current year and redraws its weekday. Only the links are formulas.
-  await batchClear(SHEET, ["Leads!A2:N3000", "Routing!A1:L3000"]);
+  await batchClear(SHEET, ["Leads!A1:N3000", "Routing!A1:L3000"]);
   await batchUpdateValues(
     SHEET,
     [
-      { range: "Leads!A1", values: [LEADS_HEADER, ...leadText] },
-      { range: "Leads!N2", values: leads.map((v) => [v.c.id]) },
+      { range: "Leads!A1", values: [LEADS_HEADER, ...leadRows] },
+      { range: "Leads!L2", values: leadIds },
       { range: "Routing!A1", values: [ROUTING_HEADER, ...routing] },
     ],
     "RAW",
@@ -402,7 +453,7 @@ export async function runWorkbookTick(supabase: SupabaseClient, opts: { now?: Da
   await batchUpdateValues(
     SHEET,
     [
-      { range: "Leads!L2", values: leads.map((v) => [v.link ? `=HYPERLINK("${v.link}","Open email")` : ""]) },
+      { range: "Leads!J2", values: leadLinks },
       { range: "Routing!G2", values: routingLinks },
     ],
     "USER_ENTERED",
@@ -467,26 +518,62 @@ export async function runWorkbookTick(supabase: SupabaseClient, opts: { now?: Da
     ]);
   }
 
-  // "Bring into": one dropdown per lead row; the id column stays hidden.
+  // Leads layout: region bars, interest chips, bold venues, italic next
+  // steps, a "Bring into" dropdown on every venue row, the id column hidden.
   const leadsId = sheetIdOf.get("Leads");
-  if (leadsId !== undefined && leads.length)
+  if (leadsId !== undefined) {
+    const all = { sheetId: leadsId, startRowIndex: 0, endRowIndex: 3000, startColumnIndex: 0, endColumnIndex: 14 };
+    const cells = (row: number, c0: number, c1: number) => ({ sheetId: leadsId, startRowIndex: row - 1, endRowIndex: row, startColumnIndex: c0, endColumnIndex: c1 });
+    const col = (c: number) => ({ sheetId: leadsId, startRowIndex: 1, endRowIndex: 3000, startColumnIndex: c, endColumnIndex: c + 1 });
+    const picks = { condition: { type: "ONE_OF_LIST", values: [...books.keys()].map((a) => ({ userEnteredValue: a })) }, strict: true, showCustomUi: true };
     await batchUpdate(SHEET, [
-      {
-        setDataValidation: {
-          range: { sheetId: leadsId, startRowIndex: 1, endRowIndex: 1 + leads.length, startColumnIndex: 12, endColumnIndex: 13 },
-          rule: { condition: { type: "ONE_OF_LIST", values: [...books.keys()].map((a) => ({ userEnteredValue: a })) }, strict: true, showCustomUi: true },
+      { clearBasicFilter: { sheetId: leadsId } },
+      { unmergeCells: { range: all } },
+      { setDataValidation: { range: all } },
+      { repeatCell: { range: all, cell: { userEnteredFormat: { verticalAlignment: "TOP", wrapStrategy: "WRAP", textFormat: { fontSize: 10 } } }, fields: "userEnteredFormat" } },
+      { updateSheetProperties: { properties: { sheetId: leadsId, gridProperties: { frozenRowCount: 1 } }, fields: "gridProperties.frozenRowCount" } },
+      { repeatCell: { range: cells(1, 0, LEADS_HEADER.length), cell: { userEnteredFormat: { textFormat: { bold: true }, backgroundColor: { red: 0.93, green: 0.93, blue: 0.93 } } }, fields: "userEnteredFormat(textFormat,backgroundColor)" } },
+      ...[210, 130, 140, 170, 200, 210, 380, 230, 90, 90, 190, 60].map((w, i) => ({
+        updateDimensionProperties: { range: { sheetId: leadsId, dimension: "COLUMNS", startIndex: i, endIndex: i + 1 }, properties: { pixelSize: w }, fields: "pixelSize" },
+      })),
+      { updateDimensionProperties: { range: { sheetId: leadsId, dimension: "COLUMNS", startIndex: ID_COL, endIndex: ID_COL + 1 }, properties: { hiddenByUser: true }, fields: "hiddenByUser" } },
+      { repeatCell: { range: col(0), cell: { userEnteredFormat: { textFormat: { bold: true, fontSize: 10 } } }, fields: "userEnteredFormat.textFormat" } },
+      { repeatCell: { range: col(4), cell: { userEnteredFormat: { textFormat: { foregroundColor: { red: 0.1, green: 0.25, blue: 0.62 }, fontSize: 10 } } }, fields: "userEnteredFormat.textFormat" } },
+      { repeatCell: { range: col(7), cell: { userEnteredFormat: { textFormat: { italic: true, fontSize: 10, foregroundColor: { red: 0.3, green: 0.3, blue: 0.3 } } } }, fields: "userEnteredFormat.textFormat" } },
+      ...leadRowAt.flatMap(({ row, interest }) => [
+        { repeatCell: { range: cells(row, 2, 3), cell: { userEnteredFormat: { backgroundColor: INTEREST_COLOR[interest] ?? INTEREST_COLOR.general_roster, textFormat: { bold: interest === "if_routing", fontSize: 10 } } }, fields: "userEnteredFormat(backgroundColor,textFormat)" } },
+        { setDataValidation: { range: cells(row, PICK_COL, PICK_COL + 1), rule: picks } },
+      ]),
+      ...regionBars.flatMap((b) => [
+        { mergeCells: { range: cells(b.row, 0, PICK_COL + 1), mergeType: "MERGE_ALL" } },
+        {
+          updateCells: {
+            range: cells(b.row, 0, 1),
+            rows: [
+              {
+                values: [
+                  {
+                    userEnteredValue: { stringValue: b.text },
+                    textFormatRuns: [
+                      { startIndex: 0, format: { bold: true, fontSize: 12, foregroundColor: { red: 0.12, green: 0.2, blue: 0.35 } } },
+                      { startIndex: b.split, format: { bold: false, fontSize: 10, foregroundColor: { red: 0.3, green: 0.3, blue: 0.3 } } },
+                    ],
+                  },
+                ],
+              },
+            ],
+            fields: "userEnteredValue,textFormatRuns",
+          },
         },
-      },
-      { setDataValidation: { range: { sheetId: leadsId, startRowIndex: 1 + leads.length, endRowIndex: 3000, startColumnIndex: 12, endColumnIndex: 13 } } },
-      { updateDimensionProperties: { range: { sheetId: leadsId, dimension: "COLUMNS", startIndex: 13, endIndex: 14 }, properties: { hiddenByUser: true }, fields: "hiddenByUser" } },
-      { updateDimensionProperties: { range: { sheetId: leadsId, dimension: "COLUMNS", startIndex: 12, endIndex: 13 }, properties: { pixelSize: 190 }, fields: "pixelSize" } },
-      {
-        repeatCell: {
-          range: { sheetId: leadsId, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 0, endColumnIndex: LEADS_HEADER.length },
-          cell: { userEnteredFormat: { textFormat: { bold: true }, backgroundColor: { red: 0.9, green: 0.94, blue: 0.9 } } },
-          fields: "userEnteredFormat(textFormat,backgroundColor)",
+        {
+          repeatCell: {
+            range: cells(b.row, 0, PICK_COL + 1),
+            cell: { userEnteredFormat: { backgroundColor: { red: 0.86, green: 0.9, blue: 0.95 }, verticalAlignment: "MIDDLE", padding: { top: 6, bottom: 6, left: 6, right: 6 } } },
+            fields: "userEnteredFormat(backgroundColor,verticalAlignment,padding)",
+          },
         },
-      },
+      ]),
     ]);
+  }
   return result;
 }

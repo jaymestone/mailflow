@@ -79,10 +79,15 @@ export function readBookings(masterRows: Cell[][]): Booking[] {
 export type Workbook = { tab: string; grid: Cell[][]; rowOfIso: Map<string, number> };
 
 export function toWorkbook(tab: string, grid: Cell[][]): Workbook {
+  // Only the calendar above the "no date yet" section: a lead's timing down
+  // there can itself be a date ("Sun, Oct 10, 2027", or a past year), and
+  // read as a day row it turned into a phantom Routing stop.
   const rowOfIso = new Map<string, number>();
-  grid.forEach((r, i) => {
-    if (i > 0 && typeof r[0] === "number") rowOfIso.set(serialToIso(r[0]), i + 1);
-  });
+  for (let i = 1; i < grid.length; i++) {
+    const a = grid[i]?.[0];
+    if (typeof a === "string" && /INTERESTED VENUES|^Target Window$/i.test(a.trim())) break;
+    if (typeof a === "number") rowOfIso.set(serialToIso(a), i + 1);
+  }
   return { tab, grid, rowOfIso };
 }
 

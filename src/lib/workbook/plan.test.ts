@@ -50,6 +50,14 @@ describe("parseMasterDate", () => {
   });
 });
 
+describe("toWorkbook", () => {
+  it("treats only the rows above the no-date section as the calendar", () => {
+    const wb = workbook({ 14: [45126, "Prospective", "Somewhere"] }); // 2023-07-19, in "no date yet"
+    expect(wb.rowOfIso.has("2023-07-19")).toBe(false);
+    expect(wb.rowOfIso.get("2027-01-01")).toBe(2);
+  });
+});
+
 describe("placeLead", () => {
   const base = { artist: "Rakish", bookings: [], today: "2026-10-08" };
 

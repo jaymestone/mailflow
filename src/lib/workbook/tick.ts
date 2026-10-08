@@ -37,6 +37,9 @@ import {
 
 const RADIUS_MILES = 150;
 const MAX_PER_ANCHOR = 12;
+/** Stops this close together (days apart, miles apart) share one Routing block. */
+const RUN_GAP_DAYS = 4;
+const RUN_MILES = 100;
 const OWN = /@(jaymestone\.com|jaymestoneagency\.com)$/i;
 const INTEREST_LABEL: Record<string, string> = {
   specific_date: "Date on the table",
@@ -46,7 +49,20 @@ const INTEREST_LABEL: Record<string, string> = {
   talk_later: "Talk later",
 };
 const LEADS_HEADER = ["Region", "City", "State", "Venue", "Interest", "Timing", "Fee", "Contact", "Where it stands", "Next step", "Last contact", "Email", "Bring into", "id"];
-const ROUTING_HEADER = ["Artist", "Date", "Booked / pending", "Where", "Open days nearby", "Interested venue nearby", "City", "Miles", "Interest", "Contact", "Where it stands", "Email"];
+const ROUTING_HEADER = ["Interested venue nearby", "City", "Miles", "Interest", "Contact", "Where it stands", "Email"];
+/** One light colour per artist for the Routing section bars, so where one
+ * artist's dates end and the next begin is visible at a glance. */
+const ARTIST_COLOR: Record<string, { red: number; green: number; blue: number }> = {
+  "The Little Mercies": { red: 0.85, green: 0.93, blue: 0.83 },
+  Rakish: { red: 0.81, green: 0.89, blue: 0.97 },
+  "Amanda Pascali": { red: 0.99, green: 0.89, blue: 0.8 },
+  "Sam Reider": { red: 0.89, green: 0.85, blue: 0.96 },
+  "Jorge Glem & Sam Reider": { red: 0.8, green: 0.93, blue: 0.92 },
+  "Lily Henley": { red: 0.98, green: 0.85, blue: 0.9 },
+  "Samir Langus": { red: 0.99, green: 0.95, blue: 0.78 },
+  "Charlie & The Tropicales": { red: 0.98, green: 0.84, blue: 0.8 },
+  "Summer Camargo": { red: 0.88, green: 0.88, blue: 0.97 },
+};
 
 export type WorkbookTickResult = {
   skipped?: string;
@@ -81,6 +97,16 @@ type Conv = {
 };
 type Contact = { id: string; first_name: string | null; last_name: string | null; email: string; venue: string | null; city: string | null; state: string | null; lat: number | null; lng: number | null };
 type Coord = { lat: number; lng: number };
+
+/** Open days without weekdays, grouped by month: "Apr 13, 14, 15 · May 1, 2". */
+export function compactDays(isos: string[]): string {
+  const byMonth = new Map<string, number[]>();
+  for (const iso of isos) {
+    const m = new Date(iso + "T12:00:00Z").toLocaleDateString("en-US", { month: "short", timeZone: "UTC" });
+    byMonth.set(m, [...(byMonth.get(m) ?? []), Number(iso.slice(8, 10))]);
+  }
+  return [...byMonth].map(([m, d]) => `${m} ${d.join(", ")}`).join(" · ");
+}
 
 const miles = (a: Coord, b: Coord) => {
   const r = (d: number) => (d * Math.PI) / 180;
@@ -254,8 +280,15 @@ export async function runWorkbookTick(supabase: SupabaseClient, opts: { now?: Da
   result.leads = leads.length;
 
   // ---- 3b. Routing: interested venues near every date on a calendar ---------
+  // Laid out in blocks, one per date on an artist's calendar: a coloured bar
+  // naming the stop and its open days, the interested venues under it, then
+  // a blank row. A flat table repeated the same stop on every row, which
+  // Jayme found hard to read.
   const routing: Cell[][] = [];
   const routingLinks: Cell[][] = [];
+  type Segment = { text: string; style: "artist" | "dates" | "venue" | "status" | "city" | "sep" | "open" };
+  const bars: { row: number; artist: string; segments: Segment[] }[] = [];
+  const routingHot: number[] = []; // rows whose venue said "if you're routing nearby"
   for (const [artist, wb] of books) {
     type Day = { venue: string; status: string; city: string; state: string };
     const cal = new Map<string, Day>();
@@ -275,6 +308,9 @@ export async function runWorkbookTick(supabase: SupabaseClient, opts: { now?: Da
       for (const iso of eachDay(b.range![0], b.range![1])) if (wb.rowOfIso.has(iso) && !cal.has(iso)) cal.set(iso, { venue: b.venue, status: b.status, city: b.city, state: b.state });
 
     const isos = [...wb.rowOfIso.keys()].sort();
+    // Stops: consecutive days at one venue.
+    type Stop = { i: number; j: number; day: Day; where: Coord };
+    const stops: Stop[] = [];
     for (let i = 0; i < isos.length; i++) {
       const day = cal.get(isos[i]);
       if (!day || (i > 0 && cal.get(isos[i - 1]) && sameVenue(cal.get(isos[i - 1])!.venue, day.venue))) continue;
@@ -283,12 +319,25 @@ export async function runWorkbookTick(supabase: SupabaseClient, opts: { now?: Da
       // The day's own city first: a fuzzy name match can land on a venue's
       // agent elsewhere (Old Settlers in Austin matched an agent in Colorado).
       const where = cityCoord.get(key(day.city, day.state)) ?? (day.city ? undefined : view.find((v) => sameVenue(v.lead.venue, day.venue))?.coord);
-      if (!where) continue;
-      const open: string[] = [];
-      for (let k = Math.max(0, i - 3); k <= Math.min(isos.length - 1, j + 3); k++) if ((k < i || k > j) && !cal.has(isos[k]) && !unavailable.has(isos[k])) open.push(fmtDay(isos[k]));
+      if (where) stops.push({ i, j, day, where });
+    }
+    // Runs: stops within RUN_GAP_DAYS and RUN_MILES of the one before are one
+    // block. Cottonwood (Fort Collins) then two Chautauqua nights (Boulder)
+    // each listed the same Colorado venues; as one run they list them once.
+    const runs: Stop[][] = [];
+    for (const st of stops) {
+      const last = runs[runs.length - 1]?.at(-1);
+      if (last && st.i - last.j <= RUN_GAP_DAYS && miles(last.where, st.where) <= RUN_MILES) runs[runs.length - 1].push(st);
+      else runs.push([st]);
+    }
+    for (const run of runs) {
+      const i = run[0].i;
+      const j = run[run.length - 1].j;
+      const openIsos: string[] = [];
+      for (let k = Math.max(0, i - 3); k <= Math.min(isos.length - 1, j + 3); k++) if (!cal.has(isos[k]) && !unavailable.has(isos[k])) openIsos.push(isos[k]);
       const near = view
-        .filter((v) => v.coord && !sameVenue(v.lead.venue, day.venue) && (v.lead.artists.length === 0 || v.lead.artists.includes(artist)))
-        .map((v) => ({ v, d: miles(where, v.coord!) }))
+        .filter((v) => v.coord && !run.some((st) => sameVenue(v.lead.venue, st.day.venue)) && (v.lead.artists.length === 0 || v.lead.artists.includes(artist)))
+        .map((v) => ({ v, d: Math.min(...run.map((st) => miles(st.where, v.coord!))) }))
         .filter((n) => n.d <= RADIUS_MILES)
         .sort(
           (a, b) =>
@@ -297,14 +346,31 @@ export async function runWorkbookTick(supabase: SupabaseClient, opts: { now?: Da
             a.d - b.d,
         )
         .slice(0, MAX_PER_ANCHOR);
+      if (!near.length) continue;
       const when = i === j ? fmtDay(isos[i]) : `${fmtDay(isos[i])} – ${fmtDay(isos[j])}`;
+      // Each piece in its own style (see the bar formatting below): artist,
+      // dates, venue and status, city, then the open days without weekdays.
+      const segments: Segment[] = [
+        { text: artist.toUpperCase(), style: "artist" },
+        { text: "   ", style: "sep" },
+        { text: when, style: "dates" },
+      ];
+      run.forEach((st, n) => {
+        segments.push({ text: n === 0 ? "   " : "   /   ", style: "sep" });
+        segments.push({ text: st.day.venue, style: "venue" });
+        const label = [st.day.status === "—" ? "" : st.day.status, run.length > 1 ? fmtDay(isos[st.i]) : ""].filter(Boolean).join(", ");
+        if (label) segments.push({ text: ` (${label})`, style: "status" });
+        const place = [st.day.city, st.day.state].filter(Boolean).join(", ");
+        if (place) segments.push({ text: `  ${place}`, style: "city" });
+      });
+      segments.push({ text: openIsos.length ? `\nOpen nearby: ${compactDays(openIsos)}` : "\nNo open days within 3 days either side", style: "open" });
+      // Sheet row numbers: row 1 is the header, so routing[k] lands on row k + 2.
+      bars.push({ row: routing.length + 2, artist, segments });
+      routing.push([""]);
+      routingLinks.push([""]);
       for (const n of near) {
+        if (n.v.lead.interest === "if_routing") routingHot.push(routing.length + 2);
         routing.push([
-          artist,
-          when,
-          `${day.venue} (${day.status})`,
-          [day.city, day.state].filter(Boolean).join(", "),
-          open.join(", "),
           n.v.lead.venue,
           [n.v.lead.city, n.v.lead.state].filter(Boolean).join(", "),
           String(Math.round(n.d)),
@@ -313,15 +379,17 @@ export async function runWorkbookTick(supabase: SupabaseClient, opts: { now?: Da
           n.v.lead.note,
         ]);
         routingLinks.push([n.v.link ? `=HYPERLINK("${n.v.link}","Open email")` : ""]);
+        result.routingRows++;
       }
+      routing.push([""]);
+      routingLinks.push([""]);
     }
   }
-  result.routingRows = routing.length;
 
   // ---- Write Leads and Routing ----------------------------------------------
   // RAW, not USER_ENTERED: Sheets otherwise reads "Fri, May 21" as a date in
   // the current year and redraws its weekday. Only the links are formulas.
-  await batchClear(SHEET, ["Leads!A2:N3000", "Routing!A2:L3000"]);
+  await batchClear(SHEET, ["Leads!A2:N3000", "Routing!A1:L3000"]);
   await batchUpdateValues(
     SHEET,
     [
@@ -335,10 +403,70 @@ export async function runWorkbookTick(supabase: SupabaseClient, opts: { now?: Da
     SHEET,
     [
       { range: "Leads!L2", values: leads.map((v) => [v.link ? `=HYPERLINK("${v.link}","Open email")` : ""]) },
-      { range: "Routing!L2", values: routingLinks },
+      { range: "Routing!G2", values: routingLinks },
     ],
     "USER_ENTERED",
   );
+  // Routing blocks: reset last run's merges and colours, then draw this run's.
+  const routingId = sheetIdOf.get("Routing");
+  if (routingId !== undefined) {
+    const all = { sheetId: routingId, startRowIndex: 0, endRowIndex: 3000, startColumnIndex: 0, endColumnIndex: 12 };
+    const rowRange = (row: number, c0 = 0, c1 = ROUTING_HEADER.length) => ({ sheetId: routingId, startRowIndex: row - 1, endRowIndex: row, startColumnIndex: c0, endColumnIndex: c1 });
+    await batchUpdate(SHEET, [
+      { clearBasicFilter: { sheetId: routingId } },
+      { unmergeCells: { range: all } },
+      { repeatCell: { range: all, cell: { userEnteredFormat: { verticalAlignment: "TOP", wrapStrategy: "WRAP" } }, fields: "userEnteredFormat" } },
+      { updateSheetProperties: { properties: { sheetId: routingId, gridProperties: { frozenRowCount: 1 } }, fields: "gridProperties.frozenRowCount" } },
+      { repeatCell: { range: rowRange(1), cell: { userEnteredFormat: { textFormat: { bold: true }, backgroundColor: { red: 0.93, green: 0.93, blue: 0.93 }, verticalAlignment: "TOP" } }, fields: "userEnteredFormat(textFormat,backgroundColor,verticalAlignment)" } },
+      ...[230, 140, 55, 150, 240, 460, 95].map((w, i) => ({
+        updateDimensionProperties: { range: { sheetId: routingId, dimension: "COLUMNS", startIndex: i, endIndex: i + 1 }, properties: { pixelSize: w }, fields: "pixelSize" },
+      })),
+      ...bars.flatMap((b) => {
+        const bg = ARTIST_COLOR[b.artist] ?? { red: 0.92, green: 0.92, blue: 0.92 };
+        const deep = { red: bg.red * 0.42, green: bg.green * 0.42, blue: bg.blue * 0.42 };
+        const STYLE: Record<Segment["style"], object> = {
+          artist: { bold: true, fontSize: 12, foregroundColor: deep },
+          dates: { bold: true, fontSize: 11, foregroundColor: { red: 0.1, green: 0.25, blue: 0.62 } },
+          venue: { bold: true, fontSize: 11, foregroundColor: { red: 0.1, green: 0.1, blue: 0.1 } },
+          status: { bold: false, fontSize: 10, foregroundColor: { red: 0.3, green: 0.3, blue: 0.3 } },
+          city: { italic: true, fontSize: 10, foregroundColor: { red: 0.38, green: 0.38, blue: 0.38 } },
+          sep: { fontSize: 11 },
+          open: { bold: false, fontSize: 10, foregroundColor: { red: 0.25, green: 0.25, blue: 0.25 } },
+        };
+        let at = 0;
+        const runs = b.segments.map((seg) => {
+          const r = { startIndex: at, format: STYLE[seg.style] };
+          at += seg.text.length;
+          return r;
+        });
+        return [
+          { mergeCells: { range: rowRange(b.row), mergeType: "MERGE_ALL" } },
+          {
+            updateCells: {
+              range: rowRange(b.row, 0, 1),
+              rows: [{ values: [{ userEnteredValue: { stringValue: b.segments.map((x) => x.text).join("") }, textFormatRuns: runs }] }],
+              fields: "userEnteredValue,textFormatRuns",
+            },
+          },
+          {
+            repeatCell: {
+              range: rowRange(b.row),
+              cell: { userEnteredFormat: { backgroundColor: bg, wrapStrategy: "WRAP", verticalAlignment: "MIDDLE", padding: { top: 6, bottom: 6, left: 6, right: 6 } } },
+              fields: "userEnteredFormat(backgroundColor,wrapStrategy,verticalAlignment,padding)",
+            },
+          },
+        ];
+      }),
+      ...routingHot.map((row) => ({
+        repeatCell: {
+          range: rowRange(row, 3, 4),
+          cell: { userEnteredFormat: { textFormat: { bold: true, foregroundColor: { red: 0.1, green: 0.45, blue: 0.2 } } } },
+          fields: "userEnteredFormat.textFormat",
+        },
+      })),
+    ]);
+  }
+
   // "Bring into": one dropdown per lead row; the id column stays hidden.
   const leadsId = sheetIdOf.get("Leads");
   if (leadsId !== undefined && leads.length)

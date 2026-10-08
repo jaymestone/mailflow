@@ -45,3 +45,4 @@ yarn-error.log*
 next-env.d.ts
 scripts/.workbook-extract.json
 scripts/.workbook-writes.json
+scripts/.workbook-writes-*.json

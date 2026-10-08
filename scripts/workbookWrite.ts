@@ -79,6 +79,26 @@ const sameVenue = (a: string | null | undefined, b: string | null | undefined) =
   return x === y || (Math.min(x.length, y.length) >= 6 && (x.includes(y) || y.includes(x)));
 };
 const FREE_MAIL = /@(gmail|yahoo|hotmail|outlook|aol|icloud|me|mac|comcast|verizon|att|live|msn|protonmail|ymail)\./i;
+/** "CPAC" for "Community Performance Center" / "Community Performing Arts
+ * Center": an all-caps short name whose letters are the other's initials. */
+const initialsMatch = (short: string, long: string) => {
+  const [a, b] = short.length <= long.length ? [short, long] : [long, short];
+  if (!/^[A-Z&]{2,6}$/.test(a.replace(/\s/g, ""))) return sameVenue(a, b);
+  const initials = b.split(/[^A-Za-z]+/).filter((w) => w && !/^(the|of|and|at|for)$/i.test(w)).map((w) => w[0].toUpperCase()).join("");
+  const letters = a.replace(/[^A-Z]/g, "");
+  return initials.startsWith(letters.slice(0, 2)) && letters.length >= 3;
+};
+const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+/** Master's date text: "Mar 17, 2027", "Aug 7-8, 2027", "Mar 31-Apr 2, 2027". */
+function parseMasterDate(t: string): [string, string] | null {
+  const m = t.trim().match(/^([A-Za-z]{3})[a-z]*\.?\s+(\d{1,2})(?:\s*[-–]\s*(?:([A-Za-z]{3})[a-z]*\.?\s+)?(\d{1,2}))?,?\s*(\d{4})/);
+  if (!m) return null;
+  const mo = MONTHS.indexOf(m[1].toLowerCase());
+  const mo2 = m[3] ? MONTHS.indexOf(m[3].toLowerCase()) : mo;
+  if (mo < 0 || mo2 < 0) return null;
+  const iso = (y: string, mi: number, d: string) => `${y}-${String(mi + 1).padStart(2, "0")}-${d.padStart(2, "0")}`;
+  return [iso(m[5], mo, m[2]), iso(m[5], mo2, m[4] ?? m[2])];
+}
 const money = (n: number | null) => (n == null ? "" : `$${n.toLocaleString("en-US")}`);
 const miles = (a: { lat: number; lng: number }, b: { lat: number; lng: number }) => {
   const r = (d: number) => (d * Math.PI) / 180;
@@ -155,8 +175,26 @@ async function main() {
   console.log(`${convs.length} conversations extracted; ${convs.length - live.length} declined (left out); ${live.length} live`);
 
   // ---- Artist workbooks ----------------------------------------------------
-  const wbRead = await sheets.spreadsheets.values.batchGet({ spreadsheetId: MASTER, ranges: Object.values(WORKBOOK).map((t) => `'${t}'!A1:G1000`) });
+  const wbRead = await sheets.spreadsheets.values.batchGet({ spreadsheetId: MASTER, ranges: Object.values(WORKBOOK).map((t) => `'${t}'!A1:J1000`) });
   const wb = new Map<string, string[][]>(Object.values(WORKBOOK).map((t, i) => [t, (wbRead.data.valueRanges[i].values ?? []) as string[][]]));
+  // Master: every booking Jayme has recorded, by artist. A lead for a venue
+  // already booked is either stale (an older "holding pattern" thread for a
+  // show that has since been confirmed -- CPAC in Green Valley) or a genuine
+  // return booking. Upcoming bookings skip the lead unless the reply looks
+  // past it (a later window, or "talk later"); past ones are kept and noted.
+  const masterRows = ((await sheets.spreadsheets.values.get({ spreadsheetId: MASTER, range: "Master!A2:G1500" })).data.values ?? []) as string[][];
+  const bookings = masterRows
+    .filter((r) => r[0] && !/cancel/i.test(r[0]))
+    .map((r) => {
+      const [city = "", state = ""] = (r[6] ?? "").split(",").map((x) => x.trim());
+      return { status: r[0], artist: r[1], dateText: r[2] ?? "", range: parseMasterDate(r[2] ?? ""), venue: r[3] ?? "", city, state };
+    });
+  const today = new Date().toISOString().slice(0, 10);
+  const bookedFor = (artist: string, l: { venue: string; city: string; state: string }) =>
+    bookings.find(
+      (b) => b.artist === artist && (sameVenue(b.venue, l.venue) || (l.city && norm(b.city) === norm(l.city) && norm(b.state) === norm(l.state) && initialsMatch(b.venue, l.venue))),
+    );
+
   const writes: { range: string; values: string[][] }[] = [];
   const summary: Record<string, { dated: number; undated: number; skipped: number }> = {};
   // Rows taken by an earlier lead in this same run, so two leads never share a date row.
@@ -175,6 +213,13 @@ async function main() {
         s.skipped++;
         continue;
       }
+      const booked = bookedFor(artist, l);
+      if (booked && booked.range && booked.range[1] >= today && !l.x.target_window && l.x.interest !== "talk_later") {
+        if (process.env.SHOW_SKIPS) console.log(`  skip ${artist}: "${l.venue}" already booked ${booked.dateText}`);
+        s.skipped++;
+        continue;
+      }
+      const bookedNote = booked ? `Booked: ${booked.venue} ${booked.dateText} (Master). ` : "";
       venuesPresent.push(l.venue);
       // A fee on a thread about two artists is the thread's total, not this
       // artist's -- the note carries the split.
@@ -198,7 +243,7 @@ async function main() {
         free.forEach((iso, i) =>
           writes.push({
             range: `'${tab}'!B${rowOf(iso)}:G${rowOf(iso)}`,
-            values: [[STATUS[d.kind] ?? "Inquiry", l.venue, l.city, l.state, i === 0 ? fee : "", i === 0 ? `${l.x.note} Next: ${l.x.next_step}` : ""]],
+            values: [[STATUS[d.kind] ?? "Inquiry", l.venue, l.city, l.state, i === 0 ? fee : "", i === 0 ? `${bookedNote}${l.x.note} Next: ${l.x.next_step}` : ""]],
           }),
         );
         if (free.length) placed = true;
@@ -216,7 +261,7 @@ async function main() {
       const clash = taken.length ? ` Asked for ${taken.join(", ")} -- already taken.` : "";
       writes.push({
         range: `'${tab}'!A${nextBottom}:G${nextBottom}`,
-        values: [[window || "No date yet", mine.length ? "Inquiry" : "Prospective", l.venue, l.city, l.state, fee, `${l.x.note}${clash} Next: ${l.x.next_step}`]],
+        values: [[window || "No date yet", mine.length ? "Inquiry" : "Prospective", l.venue, l.city, l.state, fee, `${bookedNote}${l.x.note}${clash} Next: ${l.x.next_step}`]],
       });
       nextBottom++;
       s.undated++;
@@ -245,34 +290,53 @@ async function main() {
   const leadsHeader = ["Region", "City", "State", "Venue", "Interest", "Timing", "Fee", "Contact", "Where it stands", "Next step", "Last contact", "Email"];
 
   // ---- Routing ---------------------------------------------------------------
-  // Anchors: every dated row on an artist's calendar (after the writes above),
-  // consecutive days at one venue grouped as one stop.
+  // Each artist's 2027 calendar, from three places: the workbook's date rows
+  // (including this run's writes), Master's recorded bookings, and shows the
+  // artist marked "Booked (own show)" on their page. Consecutive days at one
+  // place are one stop. Days the artist marked Unavailable are never offered
+  // as open days.
   const pending = new Map<string, string[]>(); // "tab!row" -> values B..G
   for (const w of writes) {
     const m = w.range.match(/^'(.+)'!B(\d+):G\d+$/);
     if (m) pending.set(`${m[1]}!${m[2]}`, w.values[0]);
   }
+  type Day = { venue: string; status: string; city: string; state: string };
   const routingRows: string[][] = [];
   let anchors = 0;
   for (const [artist, tab] of Object.entries(WORKBOOK)) {
     const grid = wb.get(tab)!;
-    const rowVals = (row: number) => pending.get(`${tab}!${row}`) ?? (grid[row - 1] ?? []).slice(1, 7);
+    const cal = new Map<number, Day>();
+    const unavailable = new Set<number>();
     for (let row = 2; row <= 366; row++) {
-      const [status, venue, city, state] = rowVals(row).map((v) => (v ?? "").trim());
-      if (!venue || sameVenue(rowVals(row - 1)[1], venue)) continue;
+      const [status = "", venue = "", city = "", state = ""] = (pending.get(`${tab}!${row}`) ?? (grid[row - 1] ?? []).slice(1, 5)).map((v) => (v ?? "").trim());
+      if (venue) cal.set(row, { venue, status: status || "—", city, state });
+      const avail = (grid[row - 1]?.[7] ?? "").trim();
+      const where = (grid[row - 1]?.[8] ?? "").trim();
+      if (avail === "Unavailable") unavailable.add(row);
+      if (/^booked/i.test(avail) && !cal.has(row)) {
+        const [c = "", st = ""] = where.split(",").map((x) => x.trim());
+        cal.set(row, { venue: "Artist's own show", status: "Booked by artist", city: c, state: st });
+      }
+    }
+    for (const b of bookings.filter((b) => b.artist === artist && b.range && b.range[0].startsWith("2027")))
+      for (const iso of days(b.range![0], b.range![1])) if (iso.startsWith("2027") && !cal.has(rowOf(iso))) cal.set(rowOf(iso), { venue: b.venue, status: `${b.status} (Master)`, city: b.city, state: b.state });
+
+    for (let row = 2; row <= 366; row++) {
+      const day = cal.get(row);
+      if (!day || (cal.get(row - 1) && sameVenue(cal.get(row - 1)!.venue, day.venue))) continue;
       let last = row;
-      while (last < 366 && sameVenue(rowVals(last + 1)[1], venue)) last++;
-      const fromLead = live.find((l) => sameVenue(l.venue, venue));
+      while (last < 366 && cal.get(last + 1) && sameVenue(cal.get(last + 1)!.venue, day.venue)) last++;
+      const fromLead = live.find((l) => sameVenue(l.venue, day.venue));
       // The row's own city first: a fuzzy name match can land on the
       // venue's agent elsewhere (Old Settlers in Austin matched Tico Time,
       // whose contact is in Colorado).
-      const where = coordOf(city, state) ?? (city ? undefined : fromLead?.coord);
+      const where = coordOf(day.city, day.state) ?? (day.city ? undefined : fromLead?.coord);
       if (!where) continue;
       anchors++;
       const open: string[] = [];
-      for (let r = Math.max(2, row - 3); r <= Math.min(366, last + 3); r++) if ((r < row || r > last) && !rowVals(r)[1]) open.push(fmtDay(isoOfRow(r)));
+      for (let r = Math.max(2, row - 3); r <= Math.min(366, last + 3); r++) if ((r < row || r > last) && !cal.has(r) && !unavailable.has(r)) open.push(fmtDay(isoOfRow(r)));
       const near = live
-        .filter((l) => l.coord && !sameVenue(l.venue, venue) && (l.x.artists.length === 0 || l.x.artists.includes(artist)))
+        .filter((l) => l.coord && !sameVenue(l.venue, day.venue) && (l.x.artists.length === 0 || l.x.artists.includes(artist)))
         .map((l) => ({ l, d: miles(where, l.coord!) }))
         .filter((n) => n.d <= RADIUS_MILES)
         .sort((a, b) => Number(b.l.x.interest === "if_routing") - Number(a.l.x.interest === "if_routing") || Number(b.l.x.artists.includes(artist)) - Number(a.l.x.artists.includes(artist)) || a.d - b.d)
@@ -282,8 +346,8 @@ async function main() {
         routingRows.push([
           artist,
           when,
-          `${venue} (${status || "—"})`,
-          [city, state].filter(Boolean).join(", "),
+          `${day.venue} (${day.status})`,
+          [day.city, day.state].filter(Boolean).join(", "),
           open.join(", "),
           n.l.venue,
           [n.l.city, n.l.state].filter(Boolean).join(", "),

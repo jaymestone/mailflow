@@ -279,7 +279,7 @@ export async function runWorkbookTick(supabase: SupabaseClient, opts: { now?: Da
   const bars: { row: number; artist: string; segments: Segment[] }[] = [];
   const routingHot: number[] = []; // rows whose venue said "if you're routing nearby"
   // Every run on every calendar, for the Leads tab's "Near a booked date".
-  const runIndex: { artist: string; when: string; coords: Coord[] }[] = [];
+  const runIndex: { artist: string; when: string; coords: Coord[]; confirmed: boolean }[] = [];
   for (const [artist, wb] of books) {
     type Day = { venue: string; status: string; city: string; state: string };
     const cal = new Map<string, Day>();
@@ -337,7 +337,14 @@ export async function runWorkbookTick(supabase: SupabaseClient, opts: { now?: Da
             a.d - b.d,
         )
         .slice(0, MAX_PER_ANCHOR);
-      runIndex.push({ artist, when: compactRange(isos[i], isos[j]), coords: run.map((st) => st.where) });
+      runIndex.push({
+        artist,
+        when: compactRange(isos[i], isos[j]),
+        coords: run.map((st) => st.where),
+        // A run is confirmed if any of its shows is: a Confirmed row (Jayme's
+        // or from Master) or a show the artist booked themselves.
+        confirmed: run.some((st) => /^confirmed|booked by artist/i.test(st.day.status)),
+      });
       if (!near.length) continue;
       const when = i === j ? fmtDay(isos[i]) : `${fmtDay(isos[i])} – ${fmtDay(isos[j])}`;
       // Each piece in its own style (see the bar formatting below): artist,
@@ -398,6 +405,7 @@ export async function runWorkbookTick(supabase: SupabaseClient, opts: { now?: Da
   const leadIds: Cell[][] = [];
   const regionBars: { row: number; text: string; split: number }[] = [];
   const leadRowAt: { row: number; interest: string }[] = [];
+  const nearCells: { row: number; parts: { text: string; confirmed: boolean }[] }[] = [];
   for (const region of [...new Set(leads.map((v) => v.c.region ?? "Other"))]) {
     const group = leads.filter((v) => (v.c.region ?? "Other") === region);
     const count = (k: string) => group.filter((v) => v.lead.interest === k).length;
@@ -408,15 +416,17 @@ export async function runWorkbookTick(supabase: SupabaseClient, opts: { now?: Da
     leadLinks.push([""]);
     leadIds.push([""]);
     for (const v of group) {
-      const near = v.coord
+      // ✓ confirmed, ○ prospective (inquiry, hold, offer); confirmed first.
+      const parts = v.coord
         ? runIndex
             .map((r) => ({ r, d: Math.min(...r.coords.map((c) => miles(c, v.coord!))) }))
             .filter((n) => n.d <= RADIUS_MILES)
-            .sort((a, b) => a.d - b.d)
-            .slice(0, 2)
-            .map((n) => `${n.r.artist} · ${n.r.when} · ${Math.round(n.d)} mi`)
-            .join("\n")
-        : "";
+            .sort((a, b) => Number(b.r.confirmed) - Number(a.r.confirmed) || a.d - b.d)
+            .slice(0, 3)
+            .map((n) => ({ text: `${n.r.confirmed ? "✓" : "○"} ${n.r.artist} · ${n.r.when} · ${Math.round(n.d)} mi`, confirmed: n.r.confirmed }))
+        : [];
+      const near = parts.map((x) => x.text).join("\n");
+      if (parts.length) nearCells.push({ row: leadRows.length + 2, parts });
       leadRowAt.push({ row: leadRows.length + 2, interest: v.lead.interest });
       leadRows.push([
         v.lead.venue,
@@ -538,7 +548,26 @@ export async function runWorkbookTick(supabase: SupabaseClient, opts: { now?: Da
       })),
       { updateDimensionProperties: { range: { sheetId: leadsId, dimension: "COLUMNS", startIndex: ID_COL, endIndex: ID_COL + 1 }, properties: { hiddenByUser: true }, fields: "hiddenByUser" } },
       { repeatCell: { range: col(0), cell: { userEnteredFormat: { textFormat: { bold: true, fontSize: 10 } } }, fields: "userEnteredFormat.textFormat" } },
-      { repeatCell: { range: col(4), cell: { userEnteredFormat: { textFormat: { foregroundColor: { red: 0.1, green: 0.25, blue: 0.62 }, fontSize: 10 } } }, fields: "userEnteredFormat.textFormat" } },
+      ...nearCells.map(({ row, parts }) => {
+        let at = 0;
+        const runs = parts.map((p, n) => {
+          const r = {
+            startIndex: at,
+            format: p.confirmed
+              ? { bold: true, fontSize: 10, foregroundColor: { red: 0.1, green: 0.45, blue: 0.2 } }
+              : { bold: false, fontSize: 10, foregroundColor: { red: 0.42, green: 0.42, blue: 0.42 } },
+          };
+          at += p.text.length + (n < parts.length - 1 ? 1 : 0);
+          return r;
+        });
+        return {
+          updateCells: {
+            range: cells(row, 4, 5),
+            rows: [{ values: [{ userEnteredValue: { stringValue: parts.map((p) => p.text).join("\n") }, textFormatRuns: runs }] }],
+            fields: "userEnteredValue,textFormatRuns",
+          },
+        };
+      }),
       { repeatCell: { range: col(7), cell: { userEnteredFormat: { textFormat: { italic: true, fontSize: 10, foregroundColor: { red: 0.3, green: 0.3, blue: 0.3 } } } }, fields: "userEnteredFormat.textFormat" } },
       ...leadRowAt.flatMap(({ row, interest }) => [
         { repeatCell: { range: cells(row, 2, 3), cell: { userEnteredFormat: { backgroundColor: INTEREST_COLOR[interest] ?? INTEREST_COLOR.general_roster, textFormat: { bold: interest === "if_routing", fontSize: 10 } } }, fields: "userEnteredFormat(backgroundColor,textFormat)" } },

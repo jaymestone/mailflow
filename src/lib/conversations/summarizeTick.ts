@@ -175,6 +175,14 @@ export async function runConversationSummarizeTick(
           fee_amount: summary.fee_amount,
           fee_note: summary.fee_note,
           artist: summary.artist,
+          // The booking-sheet reading; the workbook tick places it.
+          sheet_artists: summary.sheet_artists ?? [],
+          sheet_dates: summary.sheet_dates ?? [],
+          sheet_window: summary.sheet_window ?? null,
+          sheet_interest: summary.sheet_interest ?? null,
+          sheet_routing_area: summary.sheet_routing_area ?? null,
+          sheet_note: summary.sheet_note ?? null,
+          sheet_next_step: summary.next_action || null,
           // Only fill the venue from the summary when the contact record
           // did not already supply one -- the catalogue name is the one
           // Jayme's lists and segments use, and letting a venue's own

@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { SHEET_ROSTER } from "@/lib/workbook/roster";
 
 /** Reads a whole booking thread and extracts where it actually stands.
  *
@@ -48,12 +49,22 @@ export type ThreadSummary = {
   venue: string | null;
   is_agreed: boolean;
   is_small: boolean;
+  /** The booking-sheet reading of the thread -- see src/lib/workbook/tick.ts. */
+  sheet_artists: string[];
+  sheet_dates: { start: string; end: string | null; kind: string; artist: string | null }[];
+  sheet_window: string | null;
+  sheet_interest: string;
+  sheet_routing_area: string | null;
+  sheet_note: string;
 };
 
 const SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["gist", "next_action", "fee_amount", "fee_note", "artist", "venue", "is_agreed", "is_small"],
+  required: [
+    "gist", "next_action", "fee_amount", "fee_note", "artist", "venue", "is_agreed", "is_small",
+    "sheet_artists", "sheet_dates", "sheet_window", "sheet_interest", "sheet_routing_area", "sheet_note",
+  ],
   properties: {
     gist: {
       type: "string",
@@ -92,6 +103,50 @@ const SCHEMA = {
       type: "boolean",
       description:
         "True when this is worth under about $1,000, or is a door split, or is a rental rather than a fee. Jayme does not want these in his eyeline.",
+    },
+    // The fields below feed the artist workbooks in the booking spreadsheet.
+    sheet_artists: {
+      type: "array",
+      items: { type: "string", enum: [...SHEET_ROSTER] },
+      description:
+        "Roster artists the VENUE has shown interest in, or that a specific offer or date is about. If Jayme's pitch was about one artist only (e.g. subject 'The Little Mercies X ...') and the venue replied with interest, include that artist. For a whole-roster pitch, only artists the venue singled out, or that Jayme offered for a specific date the venue engaged with -- not every artist listed. Sam Reider & the Human Hands is 'Sam Reider'. Empty if the venue is interested in the roster generally.",
+    },
+    sheet_dates: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["start", "end", "kind", "artist"],
+        properties: {
+          start: { type: "string", description: "YYYY-MM-DD" },
+          end: { type: ["string", "null"], description: "YYYY-MM-DD for a multi-day run, else null" },
+          kind: { type: "string", enum: ["confirmed", "hold", "offered", "asked_about"] },
+          artist: {
+            anyOf: [{ type: "string", enum: [...SHEET_ROSTER] }, { type: "null" }],
+            description: "Which roster artist this date is for, when the thread ties it to one. Null if the date is for the venue generally.",
+          },
+        },
+      },
+      description:
+        "Specific calendar dates on the table for a performance (festival dates, a requested night, an offered date). Only dates someone actually wrote. Not follow-up dates or deadlines. Dates without a year mean the next occurrence after the message was sent.",
+    },
+    sheet_window: {
+      type: ["string", "null"],
+      description: "When it could happen if there is no specific date, in a few words: 'spring 2027', 'late 2027', '2027-28 season'. Null if nothing was said.",
+    },
+    sheet_interest: {
+      type: "string",
+      enum: ["specific_date", "artist_no_date", "if_routing", "general_roster", "talk_later", "declined"],
+      description:
+        "specific_date: a date or dates are on the table. artist_no_date: interested in a named artist, no date yet. if_routing: interested only if an artist is touring nearby. general_roster: likes the roster, nothing specific. talk_later: asked to reconnect at a later time. declined: not interested / passed.",
+    },
+    sheet_routing_area: {
+      type: ["string", "null"],
+      description: "For if_routing: the place routing has to pass, as they put it ('Chicago', 'BC / Golden'). Else null.",
+    },
+    sheet_note: {
+      type: "string",
+      description: "One line, max 160 characters, for Jayme's booking sheet: who, what was said, any fee or capacity. Concrete. Only what the messages say.",
     },
   },
 } as const;

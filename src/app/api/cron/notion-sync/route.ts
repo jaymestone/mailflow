@@ -36,6 +36,15 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  // Retired 2026-10-08: the booking pipeline moved to the [MASTER] Tour
+  // Dates spreadsheet (src/lib/workbook/tick.ts) because the Notion board was
+  // too much to work from. Off unless explicitly re-enabled, so a stray
+  // cron job cannot start writing to Notion again. 200, not an error, so the
+  // health alert stays quiet about something switched off on purpose.
+  if (process.env.NOTION_SYNC_ENABLED !== "true") {
+    return NextResponse.json({ skipped: true, reason: "Notion sync retired; set NOTION_SYNC_ENABLED=true to re-enable" });
+  }
+
   const token = process.env.NOTION_TOKEN;
   if (!token) {
     // 200, not an error: an unconfigured sync is a normal state for a

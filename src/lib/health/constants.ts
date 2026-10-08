@@ -16,8 +16,8 @@ export const EXPECTED_INTERVAL_MINUTES: Record<string, number> = {
   // twenty booking replies invisible on it -- nothing watched this job, so
   // nothing said a word.
   "conversations-tick": 2,
-  // Runs every 15 minutes, so this alerts after 45 of silence. Added
-  // alongside conversations-tick: both jobs' schedules disappeared the
-  // same night and neither was watched by anything.
-  "notion-sync-tick": 15,
+  // The booking spreadsheet (artist workbooks, Leads, Routing), every 15
+  // minutes. notion-sync-tick was watched here until the Notion board was
+  // retired on 2026-10-08 in favour of this.
+  "workbook-tick": 15,
 };

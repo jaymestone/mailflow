@@ -77,6 +77,11 @@ describe("placeLead", () => {
     expect(String(writes[0].values[0][6])).toContain("already taken");
   });
 
+  it("marks an interested venue with no date as Inquiry, never Prospective", () => {
+    const { writes } = placeLead({ ...base, wb: workbook(), lead: lead() });
+    expect(writes[0].values[0][1]).toBe("Inquiry");
+  });
+
   it("ignores a date the thread ties to another artist", () => {
     const wb = workbook();
     const { placement } = placeLead({ ...base, wb, lead: lead({ artists: ["Rakish", "Samir Langus"], dates: [{ start: "2027-01-05", end: null, kind: "offered", artist: "Samir Langus" }] }) });

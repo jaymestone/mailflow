@@ -261,7 +261,7 @@ async function main() {
       const clash = taken.length ? ` Asked for ${taken.join(", ")} -- already taken.` : "";
       writes.push({
         range: `'${tab}'!A${nextBottom}:G${nextBottom}`,
-        values: [[window || "No date yet", mine.length ? "Inquiry" : "Prospective", l.venue, l.city, l.state, fee, `${bookedNote}${l.x.note}${clash} Next: ${l.x.next_step}`]],
+        values: [[window || "No date yet", "Inquiry", l.venue, l.city, l.state, fee, `${bookedNote}${l.x.note}${clash} Next: ${l.x.next_step}`]],
       });
       nextBottom++;
       s.undated++;

@@ -180,7 +180,10 @@ export function placeLead(opts: { artist: string; wb: Workbook; lead: Lead; book
     .join(" · ");
   const fullNote = taken.length ? `${note.replace(/ Next: .*$/, "")} Asked for ${taken.join(", ")} -- already taken.${lead.nextStep ? ` Next: ${lead.nextStep}` : ""}` : note;
   const row = nextBottomRow(wb);
-  const values: Cell[] = [when || "No date yet", mine.length ? "Inquiry" : "Prospective", lead.venue, lead.city, lead.state, fee, fullNote];
+  // Inquiry, not Prospective: the venue has expressed interest. Prospective
+  // is Jayme's own word for a possibility he spotted, with no interest
+  // expressed yet (his definitions, 2026-10-08), so this never writes it.
+  const values: Cell[] = [when || "No date yet", "Inquiry", lead.venue, lead.city, lead.state, fee, fullNote];
   setRow(wb, row, 0, values);
   return {
     placement: { artist, tab: wb.tab, row, venue: lead.venue, note: fullNote, kind: "undated" },

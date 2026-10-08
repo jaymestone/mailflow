@@ -389,13 +389,30 @@ async function main() {
   writeFileSync("scripts/.workbook-writes.json", JSON.stringify(writes.map((w) => w.range), null, 1));
   for (let i = 0; i < writes.length; i += 400)
     await sheets.spreadsheets.values.batchUpdate({ spreadsheetId: MASTER, requestBody: { valueInputOption: "USER_ENTERED", data: writes.slice(i, i + 400) } });
+  // RAW, not USER_ENTERED: Sheets otherwise reads a label like "Fri, May 21"
+  // as a date in the CURRENT year and redraws its weekday for that year
+  // (it showed Cottonwood's Fri May 21, 2027 as "Thu, May 21"). Only the
+  // email-link column is a formula, so it goes in separately.
+  const text = (rows: string[][]) => rows.map((r) => r.slice(0, -1));
+  const links = (rows: string[][]) => rows.map((r) => [r[r.length - 1]]);
+  const col = (n: number) => String.fromCharCode(64 + n);
+  await sheets.spreadsheets.values.batchUpdate({
+    spreadsheetId: MASTER,
+    requestBody: {
+      valueInputOption: "RAW",
+      data: [
+        { range: "Leads!A1", values: [leadsHeader, ...text(leadRows)] },
+        { range: "Routing!A1", values: [routingHeader, ...text(routingRows)] },
+      ],
+    },
+  });
   await sheets.spreadsheets.values.batchUpdate({
     spreadsheetId: MASTER,
     requestBody: {
       valueInputOption: "USER_ENTERED",
       data: [
-        { range: "Leads!A1", values: [leadsHeader, ...leadRows] },
-        { range: "Routing!A1", values: [routingHeader, ...routingRows] },
+        { range: `Leads!${col(leadsHeader.length)}2`, values: links(leadRows) },
+        { range: `Routing!${col(routingHeader.length)}2`, values: links(routingRows) },
       ],
     },
   });

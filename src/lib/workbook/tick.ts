@@ -50,6 +50,21 @@ const INTEREST_LABEL: Record<string, string> = {
 const LEADS_HEADER = ["Venue", "City", "Interest", "Timing", "Near a booked date", "Contact", "Where it stands", "Next step", "Last contact", "Email", "Bring into", "id"];
 const PICK_COL = 10; // "Bring into", K
 const ID_COL = 11; // hidden conversation id, L
+/** A light tint per region for its whole block on the Leads tab; the bar
+ * uses a deeper shade of the same colour. */
+const REGION_TINT: Record<string, { red: number; green: number; blue: number }> = {
+  Northeast: { red: 0.93, green: 0.95, blue: 1 },
+  Southeast: { red: 1, green: 0.95, blue: 0.9 },
+  Midwest: { red: 0.94, green: 0.98, blue: 0.92 },
+  "Mountain West": { red: 0.97, green: 0.94, blue: 1 },
+  Southwest: { red: 1, green: 0.97, blue: 0.88 },
+  "West Coast": { red: 0.91, green: 0.98, blue: 0.98 },
+  Canada: { red: 1, green: 0.93, blue: 0.94 },
+  Europe: { red: 0.95, green: 0.95, blue: 0.9 },
+  Other: { red: 0.95, green: 0.95, blue: 0.95 },
+};
+const deeper = (c: { red: number; green: number; blue: number }) => ({ red: c.red * 0.86, green: c.green * 0.86, blue: c.blue * 0.86 });
+
 const INTEREST_COLOR: Record<string, { red: number; green: number; blue: number }> = {
   if_routing: { red: 0.8, green: 0.92, blue: 0.8 },
   specific_date: { red: 0.8, green: 0.88, blue: 0.98 },
@@ -403,7 +418,7 @@ export async function runWorkbookTick(supabase: SupabaseClient, opts: { now?: Da
   const leadRows: Cell[][] = [];
   const leadLinks: Cell[][] = [];
   const leadIds: Cell[][] = [];
-  const regionBars: { row: number; text: string; split: number }[] = [];
+  const regionBars: { row: number; end: number; region: string; text: string; split: number }[] = [];
   const leadRowAt: { row: number; interest: string }[] = [];
   const nearCells: { row: number; parts: { text: string; confirmed: boolean }[] }[] = [];
   for (const region of [...new Set(leads.map((v) => v.c.region ?? "Other"))]) {
@@ -411,7 +426,7 @@ export async function runWorkbookTick(supabase: SupabaseClient, opts: { now?: Da
     const count = (k: string) => group.filter((v) => v.lead.interest === k).length;
     const tally = [`${group.length} venue${group.length === 1 ? "" : "s"}`, ...order.filter((k) => count(k)).map((k) => `${count(k)} ${(INTEREST_LABEL[k] ?? k).toLowerCase()}`)].join(" · ");
     const title = region.toUpperCase();
-    regionBars.push({ row: leadRows.length + 2, text: `${title}   ${tally}`, split: title.length });
+    regionBars.push({ row: leadRows.length + 2, end: leadRows.length + 1 + group.length, region, text: `${title}   ${tally}`, split: title.length });
     leadRows.push([""]);
     leadLinks.push([""]);
     leadIds.push([""]);
@@ -543,11 +558,19 @@ export async function runWorkbookTick(supabase: SupabaseClient, opts: { now?: Da
       { repeatCell: { range: all, cell: { userEnteredFormat: { verticalAlignment: "TOP", wrapStrategy: "WRAP", textFormat: { fontSize: 10 } } }, fields: "userEnteredFormat" } },
       { updateSheetProperties: { properties: { sheetId: leadsId, gridProperties: { frozenRowCount: 1 } }, fields: "gridProperties.frozenRowCount" } },
       { repeatCell: { range: cells(1, 0, LEADS_HEADER.length), cell: { userEnteredFormat: { textFormat: { bold: true }, backgroundColor: { red: 0.93, green: 0.93, blue: 0.93 } } }, fields: "userEnteredFormat(textFormat,backgroundColor)" } },
-      ...[210, 130, 140, 170, 200, 210, 380, 230, 90, 90, 190, 60].map((w, i) => ({
+      ...[210, 130, 140, 170, 270, 210, 380, 230, 90, 90, 190, 60].map((w, i) => ({
         updateDimensionProperties: { range: { sheetId: leadsId, dimension: "COLUMNS", startIndex: i, endIndex: i + 1 }, properties: { pixelSize: w }, fields: "pixelSize" },
       })),
       { updateDimensionProperties: { range: { sheetId: leadsId, dimension: "COLUMNS", startIndex: ID_COL, endIndex: ID_COL + 1 }, properties: { hiddenByUser: true }, fields: "hiddenByUser" } },
       { repeatCell: { range: col(0), cell: { userEnteredFormat: { textFormat: { bold: true, fontSize: 10 } } }, fields: "userEnteredFormat.textFormat" } },
+      // Region tint first, so the interest chips and bars below paint over it.
+      ...regionBars.map((b) => ({
+        repeatCell: {
+          range: { sheetId: leadsId, startRowIndex: b.row, endRowIndex: b.end + 1, startColumnIndex: 0, endColumnIndex: PICK_COL + 1 },
+          cell: { userEnteredFormat: { backgroundColor: REGION_TINT[b.region] ?? REGION_TINT.Other } },
+          fields: "userEnteredFormat.backgroundColor",
+        },
+      })),
       ...nearCells.map(({ row, parts }) => {
         let at = 0;
         const runs = parts.map((p, n) => {
@@ -597,7 +620,7 @@ export async function runWorkbookTick(supabase: SupabaseClient, opts: { now?: Da
         {
           repeatCell: {
             range: cells(b.row, 0, PICK_COL + 1),
-            cell: { userEnteredFormat: { backgroundColor: { red: 0.86, green: 0.9, blue: 0.95 }, verticalAlignment: "MIDDLE", padding: { top: 6, bottom: 6, left: 6, right: 6 } } },
+            cell: { userEnteredFormat: { backgroundColor: deeper(REGION_TINT[b.region] ?? REGION_TINT.Other), verticalAlignment: "MIDDLE", padding: { top: 6, bottom: 6, left: 6, right: 6 } } },
             fields: "userEnteredFormat(backgroundColor,verticalAlignment,padding)",
           },
         },

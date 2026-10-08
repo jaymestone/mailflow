@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { initialsMatch, parseMasterDate, placeLead, readBookings, refreshNote, sameVenue, toWorkbook, type Lead } from "./plan";
+import { cityStateFromAddress, initialsMatch, parseMasterDate, placeLead, readBookings, refreshNote, sameVenue, toWorkbook, type Lead } from "./plan";
 
 /** A 2027 workbook in miniature: header, Jan 1-10 as date serials, then the
  * "no date yet" header at the row after. */
@@ -47,6 +47,15 @@ describe("parseMasterDate", () => {
     expect(parseMasterDate("Sept 12, 2027")).toEqual(["2027-09-12", "2027-09-12"]);
     expect(parseMasterDate("July 30-Aug 2, 2027")).toEqual(["2027-07-30", "2027-08-02"]);
     expect(parseMasterDate("TBD")).toBeNull();
+  });
+});
+
+describe("cityStateFromAddress", () => {
+  it("reads both Jayme's and Contract Engine's address forms", () => {
+    expect(cityStateFromAddress("Medical Lake, WA")).toEqual({ city: "Medical Lake", state: "WA" });
+    expect(cityStateFromAddress("12 Main St, Mars Hill, North Carolina 28754")).toEqual({ city: "Mars Hill", state: "NC" });
+    expect(cityStateFromAddress("218 Franklin Ave, Nashville, TN 37206")).toEqual({ city: "Nashville", state: "TN" });
+    expect(cityStateFromAddress("Goderich, ON, Canada")).toEqual({ city: "Goderich", state: "ON" });
   });
 });
 

@@ -63,11 +63,35 @@ export const STATUS_FOR_KIND: Record<string, string> = { confirmed: "Confirmed",
 
 export type Booking = { status: string; artist: string; dateText: string; range: [string, string] | null; venue: string; city: string; state: string };
 
+const STATES: Record<string, string> = {
+  alabama: "AL", alaska: "AK", arizona: "AZ", arkansas: "AR", california: "CA", colorado: "CO", connecticut: "CT", delaware: "DE",
+  "district of columbia": "DC", florida: "FL", georgia: "GA", hawaii: "HI", idaho: "ID", illinois: "IL", indiana: "IN", iowa: "IA",
+  kansas: "KS", kentucky: "KY", louisiana: "LA", maine: "ME", maryland: "MD", massachusetts: "MA", michigan: "MI", minnesota: "MN",
+  mississippi: "MS", missouri: "MO", montana: "MT", nebraska: "NE", nevada: "NV", "new hampshire": "NH", "new jersey": "NJ",
+  "new mexico": "NM", "new york": "NY", "north carolina": "NC", "north dakota": "ND", ohio: "OH", oklahoma: "OK", oregon: "OR",
+  pennsylvania: "PA", "rhode island": "RI", "south carolina": "SC", "south dakota": "SD", tennessee: "TN", texas: "TX", utah: "UT",
+  vermont: "VT", virginia: "VA", washington: "WA", "west virginia": "WV", wisconsin: "WI", wyoming: "WY",
+  alberta: "AB", "british columbia": "BC", manitoba: "MB", "new brunswick": "NB", "newfoundland and labrador": "NL", "nova scotia": "NS",
+  ontario: "ON", "prince edward island": "PE", quebec: "QC", saskatchewan: "SK", yukon: "YT",
+};
+
+/** Master's Venue Address -> city and state, from Jayme's hand-entered
+ * "Medical Lake, WA" or Contract Engine's appended "12 Main St, Mars Hill,
+ * North Carolina 28754". A trailing country and a ZIP/postcode are dropped.
+ * (Same rules as contract-engine/src/master-rows.js.) */
+export function cityStateFromAddress(address: unknown): { city: string; state: string } {
+  let parts = String(address ?? "").split(",").map((x) => x.trim()).filter(Boolean);
+  if (parts.length > 2 && /^[A-Za-z][A-Za-z .]{3,}$/.test(parts[parts.length - 1]) && !STATES[parts[parts.length - 1].toLowerCase()]) parts = parts.slice(0, -1);
+  if (parts.length < 2) return { city: parts[0] ?? "", state: "" };
+  const last = parts[parts.length - 1].replace(/\s+[A-Z]?\d[\dA-Z -]*$/, "").trim();
+  return { city: parts[parts.length - 2], state: STATES[last.toLowerCase()] ?? last };
+}
+
 export function readBookings(masterRows: Cell[][]): Booking[] {
   return masterRows
     .filter((r) => r[0] && !/cancel/i.test(String(r[0])) && r[1] && r[3])
     .map((r) => {
-      const [city = "", state = ""] = String(r[6] ?? "").split(",").map((x) => x.trim());
+      const { city, state } = cityStateFromAddress(r[6]);
       return { status: String(r[0]), artist: String(r[1]).trim(), dateText: String(r[2] ?? ""), range: parseMasterDate(String(r[2] ?? "")), venue: String(r[3]).trim(), city, state };
     });
 }

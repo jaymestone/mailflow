@@ -205,9 +205,19 @@ export async function runWorkbookTick(supabase: SupabaseClient, opts: { now?: Da
   }
   // A place with no coordinates of its own borrows any geocoded contact in
   // the same city -- plenty for a 150-mile radius.
+  // Only the cities that need it are looked up; reading every geocoded
+  // contact each tick was a large share of Mailflow's Supabase egress.
   const cityCoord = new Map<string, Coord>();
-  for (const c of await readAll<Contact>(supabase, "contacts", "city, state, lat, lng", (q) => q.not("lat", "is", null)))
-    if (c.city) cityCoord.set(key(c.city, c.state), { lat: c.lat!, lng: c.lng! });
+  const needCities = [...new Set([
+    ...[...contactById.values()].filter((c) => c.lat == null && c.city).map((c) => c.city as string),
+    // Booked days on the calendars (Master bookings and artists' own shows) are placed by city too.
+    ...bookings.map((b) => b.city).filter(Boolean),
+    ...[...books.values()].flatMap((wb) => wb.grid.map((r) => String(r?.[8] ?? "").split(",")[0].trim())).filter(Boolean),
+  ])];
+  for (let i = 0; i < needCities.length; i += 100) {
+    const { data } = await supabase.from("contacts").select("city, state, lat, lng").in("city", needCities.slice(i, i + 100)).not("lat", "is", null);
+    for (const c of (data ?? []) as Contact[]) if (c.city) cityCoord.set(key(c.city, c.state), { lat: c.lat!, lng: c.lng! });
+  }
   const { data: accts } = await supabase.from("connected_accounts").select("id, email_address");
   const acctEmail = new Map((accts ?? []).map((a) => [a.id as string, a.email_address as string]));
   const firstThreads = convs.map((c) => c.gmail_thread_ids?.[0]).filter(Boolean) as string[];

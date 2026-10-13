@@ -3,6 +3,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { runConversationBuildTick } from "@/lib/conversations/buildTick";
 import { runConversationSummarizeTick } from "@/lib/conversations/summarizeTick";
 import { recordHeartbeat } from "@/lib/health/heartbeat";
+import { computeSignature, decide, readGate, writeGate } from "@/lib/conversations/changeGate";
 
 export const maxDuration = 60;
 
@@ -28,10 +29,27 @@ export async function POST(request: Request) {
   }
 
   const admin = createAdminClient();
-  const build = await runConversationBuildTick(admin);
-  const summarize = await runConversationSummarizeTick(admin, { startedAt });
+  const now = new Date();
 
-  const result = { build, summarize, elapsedMs: Date.now() - startedAt };
+  // Skip the full reads when nothing they depend on has moved (see changeGate.ts).
+  const prev = await readGate(admin);
+  const before = await computeSignature(admin);
+  const gate = decide(prev, before, now);
+
+  const build = gate.build ? await runConversationBuildTick(admin) : null;
+  const summarize = gate.summarize ? await runConversationSummarizeTick(admin, { startedAt }) : null;
+
+  if (gate.build || gate.summarize) {
+    await writeGate(admin, {
+      // Taken after both passes, so their own writes don't count as a change next minute.
+      signature: await computeSignature(admin),
+      fullRunAt: gate.build ? now.toISOString() : prev!.fullRunAt,
+      pendingSummaries: summarize ? summarize.candidates - summarize.summarized : prev?.pendingSummaries ?? 0,
+      nextRetryAt: summarize ? summarize.nextRetryAt : prev?.nextRetryAt ?? null,
+    });
+  }
+
+  const result = { gate: gate.reason, build, summarize, elapsedMs: Date.now() - startedAt };
   await recordHeartbeat(admin, "conversations-tick", result);
   return NextResponse.json(result);
 }

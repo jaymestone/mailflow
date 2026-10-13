@@ -38,6 +38,9 @@ export type SummarizeTickResult = {
    * thread stuck at the 24h cap is visible in cron_health instead of just
    * quietly never appearing. */
   blocked: number;
+  /** Earliest moment a backed-off thread becomes retryable, so the caller
+   * can skip whole ticks until then instead of re-reading the board. */
+  nextRetryAt: string | null;
   stoppedOnDeadline: boolean;
   errors: string[];
 };
@@ -116,6 +119,7 @@ export async function runConversationSummarizeTick(
     summarized: 0,
     failed: 0,
     blocked: 0,
+    nextRetryAt: null,
     stoppedOnDeadline: false,
     errors: [],
   };
@@ -141,6 +145,8 @@ export async function runConversationSummarizeTick(
   const rows = stale.filter((r) => !isBlocked(r, now));
   result.candidates = rows.length;
   result.blocked = stale.length - rows.length;
+  const retryTimes = stale.filter((r) => isBlocked(r, now)).map((r) => r.summarize_blocked_until as string).sort();
+  result.nextRetryAt = retryTimes[0] ?? null;
 
   for (const row of rows.slice(0, MAX_PER_TICK)) {
     if (Date.now() - startedAt > DEADLINE_MS) {

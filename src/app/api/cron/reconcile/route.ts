@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { runReconcileTick } from "@/lib/reply/reconcile";
 import { recordHeartbeat } from "@/lib/health/heartbeat";
+import { runScheduledActions } from "@/lib/scheduled/actions";
 
 // Pure database work -- no Gmail calls, no LLM calls -- so this is fast
 // and nowhere near the 30s external-caller ceiling that constrains the
@@ -17,5 +18,15 @@ export async function POST(request: Request) {
   const admin = createAdminClient();
   const result = await runReconcileTick(admin);
   await recordHeartbeat(admin, "reconcile-tick", result);
-  return NextResponse.json(result);
+  // One-off scheduled actions (src/lib/scheduled/actions.ts) ride on this
+  // 15-minute tick rather than needing a cron job of their own. Kept separate
+  // from the reconcile result so a failure here can't mask reconcile health.
+  let scheduled: unknown;
+  try {
+    scheduled = await runScheduledActions(admin);
+    await recordHeartbeat(admin, "scheduled-actions", scheduled);
+  } catch (err) {
+    scheduled = { error: err instanceof Error ? err.message : String(err) };
+  }
+  return NextResponse.json({ ...(result as object), scheduled });
 }

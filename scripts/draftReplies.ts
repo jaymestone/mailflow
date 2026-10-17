@@ -1,0 +1,134 @@
+// Draft replies, in Jayme's voice, to venue replies waiting on him — written
+// as Gmail drafts in the existing stone@ thread, never sent. Each draft opens
+// with an approval line; the Monday scheduled send only sends drafts where
+// Jayme deleted that line (see send_gmail_drafts' requireRemoved).
+//
+//   npx tsx --env-file=.env.local scripts/draftReplies.ts --days 7 [--limit N] [--dry]
+//
+// Writes the created draft ids to .draft-replies.json.
+import Anthropic from "@anthropic-ai/sdk";
+import { createClient } from "@supabase/supabase-js";
+import { writeFileSync } from "fs";
+import { getAccessToken, encodeHeaderWord } from "../src/lib/gmail/client";
+
+export const APPROVE_LINE = "▶ DELETE THIS LINE TO APPROVE FOR MONDAY";
+const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const args = process.argv.slice(2);
+const days = Number(args[args.indexOf("--days") + 1] || 7);
+const limit = args.includes("--limit") ? Number(args[args.indexOf("--limit") + 1]) : Infinity;
+const dry = args.includes("--dry");
+// --followups: threads where Jayme wrote last more than --days ago with no
+// answer; drafts a short check-in instead of a reply.
+const followups = args.includes("--followups");
+const OWN = /@jaymestone(agency)?\.com$/i;
+
+const SYSTEM = `You draft email replies for Jayme Stone, a booking agent (Jayme Stone Agency), replying to venue presenters and festival bookers who wrote back to him. Jayme will review every draft before it is sent.
+
+His voice: short sentences, warm, plain, no cleverness, no announced structure, no "problem-then-solution" phrasing, no tidy triplets. Typical lines: "Good to hear from you, [Name]." "Thanks so much!" "Happy to chat anytime." "Curious if there might be an opportunity…" "Could you hold [date] for us?" "What's your budget range?" Keep replies brief — usually 2–5 sentences. Do NOT write a sign-off or signature (it's added automatically). Start with "Hi [first name]," or "Good to hear from you, [first name]." Write plain text; you may link an artist name as [ARTIST NAME IN CAPS](https://www.jaymestone.com/agency/<slug>).
+
+Hard rules:
+- Never invent facts. Only state what's in the thread or in the context below.
+- Never name a new fee, confirm a date, accept or decline an offer, or agree to terms. If the venue asked for a fee, prefer asking their budget range. If a decision is needed (an offer, a hold, a date, a fee, a rate), still write the best draft you can with a placeholder in square brackets for Jayme to fill (e.g. "[$X]" or "[which date?]"), and say what's needed in NEEDS_YOU.
+- If they asked a question you can't answer from the context (tech rider, tour history, specific availability), draft a holding line or ask a clarifying question, and flag it in NEEDS_YOU.
+- If the thread doesn't need a reply at all (e.g. a polite "thanks, will keep you in mind" after Jayme's own sign-off), say SKIP.
+
+Context Jayme is working with (true facts you may use):
+- He lives in Longmont, Colorado. He is in the studio producing a record Oct 17–20, 2026 (don't mention this).
+- Roster & slugs: The Little Mercies (the-little-mercies) — old-time trio, twin fiddles, three-part harmony; Charlie & The Tropicales (charlie-and-the-tropicales) — six-piece New Orleans band, calypso/cumbia/rocksteady; Amanda Pascali (amanda-pascali) — Gen Z troubadour revitalizing Sicilian songs, based in Austin; Rakish (rakish) — Celtic tradition and Appalachian roots; Samir Langus (samir-langus) — Moroccan trance music from New York; Summer Camargo (summer-camargo) — SNL's youngest horn player, leading her own band; Sam Reider & The Human Hands (sam-reider); Lily Henley (lily-henley) — Sephardic ballads meet American roots; Jorge Glem & Sam Reider (jorge-glem-and-sam-reider). Full roster: https://www.jaymestone.com/agency
+- Current routing: Charlie & The Tropicales close the Green Box Arts Festival, Green Mountain Falls CO, Sat July 17, 2027 — booking a Colorado run around it. The Little Mercies play Blue Waters Bluegrass Festival, Medical Lake WA, Aug 7–8, 2027 — building a West Coast tour (WA → OR → CA) through August 2027. Amanda Pascali plays the Manship Theatre, Baton Rouge, Fri Jan 22, 2027, driving from Austin — booking Gulf South dates around it. The Little Mercies showcase at ArtsMarket (Durham NC) Mon Nov 2, 2026, 6:55–7:10pm; their manager Alexei Mejouev has a booth; Jayme won't attend.
+- When a deal is agreed, Jayme sends the venue a form link and his assistant Anya sends the agreement — but agreeing is Jayme's call (NEEDS_YOU).
+
+Output exactly this format:
+NEEDS_YOU: <one short line, or "none">
+---
+<the email body, or the single word SKIP>`;
+
+type Msg = { from: string; to: string; cc: string; date: string; subject: string; messageId: string; references: string; text: string };
+const header = (m: any, n: string) => (m.payload.headers || []).find((h: any) => h.name.toLowerCase() === n.toLowerCase())?.value || "";
+const plain = (p: any): string => { if (!p) return ""; if (p.mimeType === "text/plain" && p.body?.data) return Buffer.from(p.body.data, "base64url").toString("utf8"); for (const c of p.parts || []) { const t = plain(c); if (t) return t; } return ""; };
+const addrs = (v: string) => (v.match(/[^\s<>,;"]+@[^\s<>,;"]+/g) || []).map((a) => a.toLowerCase());
+const esc = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const toText = (b: string) => b.replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, "$1 <$2>");
+const toHtml = (b: string) => b.split(/\n{2,}/).map((p) => `<div>${esc(p).replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, '<a href="$2">$1</a>').replace(/\n/g, "<br>")}</div>`).join("<div><br></div>");
+const SIG = "Kindly,\n\n◙◙◙   Jayme Stone\n◙◙◙   303.495.0989\n◙◙◙   jaymestone.com\n◙◙◙   instigator / integrator";
+const SIG_HTML = 'Kindly,<br><br>◙◙◙&nbsp;&nbsp; Jayme Stone<br>◙◙◙&nbsp;&nbsp; 303.495.0989<br>◙◙◙&nbsp;&nbsp; <a href="https://www.jaymestone.com">jaymestone.com</a><br>◙◙◙&nbsp;&nbsp; instigator / integrator';
+
+async function gmail(token: string, path: string, init?: RequestInit) {
+  const r = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/${path}`, { ...init, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" } });
+  if (!r.ok) throw new Error(`Gmail ${path} ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  return r.json();
+}
+
+async function pool<T>(items: T[], n: number, fn: (x: T) => Promise<void>) {
+  let i = 0; await Promise.all(Array.from({ length: n }, async () => { while (i < items.length) await fn(items[i++]); }));
+}
+
+(async () => {
+  const { data: acct } = await supabase.from("connected_accounts").select("id").eq("email_address", "stone@jaymestone.com").single();
+  const token = await getAccessToken(supabase, acct!.id);
+  const since = new Date(Date.now() - days * 864e5).toISOString();
+  let cq = supabase.from("conversations").select("id,venue,artist,status,status_override,thread_key,gmail_thread_ids,last_message_at,contact_id,contacts(email)").eq("is_live", true);
+  cq = followups ? cq.eq("last_direction", "outbound").lt("last_message_at", since) : cq.eq("last_direction", "inbound").gte("last_message_at", since);
+  const { data: convs } = await cq.order("last_message_at", { ascending: false });
+  let todo = (convs || []).filter((c) => !/@jaymestone(agency)?\.com::/.test(c.thread_key) && (c.status_override || c.status) !== "parked");
+  if (followups) {
+    // Don't stack a check-in on top of a campaign email this venue just got or is about to get.
+    const GEN = /@(gmail|yahoo|hotmail|aol|outlook|icloud|comcast|me|msn|live|mac|earthlink|sbcglobal|att|bellsouth)\./i;
+    const org = (e: string) => (GEN.test(e) ? e.toLowerCase() : e.split("@")[1]?.toLowerCase());
+    const { data: camps } = await supabase.from("campaigns").select("id,status");
+    const live = (camps || []).filter((x) => x.status === "active" || x.status === "draft").map((x) => x.id);
+    const { data: mem } = await supabase.from("campaign_members").select("contact_id,member_status,current_step,last_sent_at,added_at,contacts(email)").in("campaign_id", live).gte("added_at", new Date(Date.now() - 21 * 864e5).toISOString());
+    const busy = new Set((mem || []).map((m: any) => org(m.contacts?.email || "")).filter(Boolean));
+    const before = todo.length;
+    todo = todo.filter((c: any) => !busy.has(org(c.contacts?.email || String(c.thread_key).split("::")[0])));
+    console.log(`${before - todo.length} skipped: in a campaign added in the last 3 weeks`);
+  }
+  todo = todo.slice(0, limit);
+
+  // Threads that already have a draft in stone@ are left alone.
+  const drafted = new Set<string>();
+  let pageToken = "";
+  do { const d = await gmail(token, `drafts?maxResults=500${pageToken ? `&pageToken=${pageToken}` : ""}`); for (const x of d.drafts || []) drafted.add(x.message.threadId); pageToken = d.nextPageToken || ""; } while (pageToken);
+
+  const out: { venue: string; draftId?: string; needsYou?: string; skipped?: string }[] = [];
+  await pool(todo, 6, async (c) => {
+    try {
+      const ids: string[] = c.gmail_thread_ids || [];
+      const { data: inb } = await supabase.from("inbound_messages").select("gmail_thread_id,received_at").eq("connected_account_id", acct!.id).in("gmail_thread_id", ids).order("received_at", { ascending: false }).limit(1);
+      const threadId = inb?.[0]?.gmail_thread_id;
+      if (!threadId) { out.push({ venue: c.venue, skipped: "no stone@ thread" }); return; }
+      if (drafted.has(threadId)) { out.push({ venue: c.venue, skipped: "already has a draft" }); return; }
+      const t = await gmail(token, `threads/${threadId}?format=full`);
+      const msgs: Msg[] = t.messages.map((m: any) => ({ from: header(m, "From"), to: header(m, "To"), cc: header(m, "Cc"), date: header(m, "Date"), subject: header(m, "Subject"), messageId: header(m, "Message-ID"), references: header(m, "References"), text: plain(m.payload).split(/\r?\nOn [^\n]{5,120}wrote:|\r?\n>|\r?\nFrom: /)[0].trim().slice(0, 2500) }));
+      const last = msgs[msgs.length - 1];
+      const jaymeLast = addrs(last.from).some((a) => OWN.test(a));
+      if (!followups && jaymeLast) { out.push({ venue: c.venue, skipped: "Jayme wrote last in Gmail" }); return; }
+      if (followups && !jaymeLast) { out.push({ venue: c.venue, skipped: "venue wrote last — covered by replies" }); return; }
+      const transcript = msgs.slice(-6).map((m) => `From: ${m.from}\nDate: ${m.date}\n\n${m.text}`).join("\n\n-----\n\n");
+      const res = await anthropic.messages.create({ model: "claude-opus-5-5", max_tokens: 2000, thinking: { type: "adaptive" }, system: SYSTEM, messages: [{ role: "user", content: `Venue: ${c.venue}${c.artist ? ` (artist discussed: ${c.artist})` : ""}\nThread (oldest first):\n\n${transcript}\n\n${followups ? `Jayme wrote the last message ${Math.round((Date.now() - Date.parse(c.last_message_at)) / 864e5)} days ago and hasn't heard back. Draft a short, friendly check-in (1–3 sentences) that picks up exactly where things were left — e.g. "Just checking back to see if you've had a chance to consider…" — without repeating the pitch. If Jayme's last message was a sign-off like "I'll check in when someone on the roster is headed your way" and there's nothing specific to follow up on, answer SKIP.` : "Draft Jayme's reply to the last message."}` }] });
+      const textOut = res.content.filter((b: any) => b.type === "text").map((b: any) => b.text).join("").trim();
+      const m = textOut.match(/NEEDS_YOU:\s*(.*)\n-{3,}\n([\s\S]*)/);
+      if (!m) { out.push({ venue: c.venue, skipped: "model output unparsed" }); return; }
+      const needs = m[1].trim(); const body = m[2].trim();
+      if (/^SKIP\b/i.test(body)) { out.push({ venue: c.venue, skipped: "no reply needed" }); return; }
+      const approve = /^none$/i.test(needs) ? APPROVE_LINE : `${APPROVE_LINE} — NEEDS YOU: ${needs}`;
+      if (dry) { out.push({ venue: c.venue, needsYou: needs, skipped: "dry run: " + body.slice(0, 120) }); return; }
+      const lastTheirs = [...msgs].reverse().find((x) => !addrs(x.from).some((a) => OWN.test(a)))!;
+      const to = addrs(lastTheirs.from)[0];
+      const cc = [...new Set(msgs.flatMap((x) => [...addrs(x.from), ...addrs(x.to), ...addrs(x.cc)]))].filter((a) => a !== to && !OWN.test(a) && !/mailer-daemon|noreply|no-reply/.test(a));
+      const subject = /^re:/i.test(last.subject) ? last.subject : `Re: ${last.subject}`;
+      const boundary = `dr_${Math.random().toString(36).slice(2)}`;
+      const raw = [`From: Jayme Stone <stone@jaymestone.com>`, `To: ${to}`, ...(cc.length ? [`Cc: ${cc.join(", ")}`] : []), `Subject: ${encodeHeaderWord(subject)}`, `In-Reply-To: ${last.messageId}`, `References: ${[last.references, last.messageId].filter(Boolean).join(" ")}`, "MIME-Version: 1.0", `Content-Type: multipart/alternative; boundary="${boundary}"`, "",
+        `--${boundary}`, "Content-Type: text/plain; charset=UTF-8", "Content-Transfer-Encoding: 8bit", "", `${approve}\n\n${toText(body)}\n\n${SIG}\n`,
+        `--${boundary}`, "Content-Type: text/html; charset=UTF-8", "Content-Transfer-Encoding: 8bit", "", `<div dir="ltr"><div><b>${esc(approve)}</b></div><div><br></div>${toHtml(body)}<div><br></div><div>${SIG_HTML}</div></div>`, `--${boundary}--`, ""].join("\r\n");
+      const d = await gmail(token, "drafts", { method: "POST", body: JSON.stringify({ message: { threadId, raw: Buffer.from(raw).toString("base64url") } }) });
+      out.push({ venue: c.venue, draftId: d.id, needsYou: /^none$/i.test(needs) ? undefined : needs });
+      console.log(`DRAFT ${c.venue}${/^none$/i.test(needs) ? "" : "  [NEEDS YOU: " + needs + "]"}`);
+    } catch (e: any) { out.push({ venue: c.venue, skipped: "error: " + String(e?.message || e).slice(0, 160) }); }
+  });
+  writeFileSync(followups ? ".draft-followups.json" : ".draft-replies.json", JSON.stringify(out, null, 1));
+  const made = out.filter((o) => o.draftId);
+  console.log(`\n${made.length} drafts, ${made.filter((o) => o.needsYou).length} need a decision, ${out.length - made.length} skipped`);
+  for (const o of out.filter((o) => o.skipped)) console.log(`  skipped ${o.venue}: ${o.skipped}`);
+})().catch((e) => { console.error(e); process.exit(1); });

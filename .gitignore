@@ -47,3 +47,5 @@ scripts/.workbook-extract.json
 scripts/.workbook-writes.json
 scripts/.workbook-writes-*.json
 scripts/.jayme-inbox-extract.json
+.draft-replies.json
+.draft-followups.json

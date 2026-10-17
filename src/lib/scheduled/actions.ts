@@ -22,7 +22,7 @@ export type ScheduledAction = {
   doneAt?: string;
   result?: unknown;
 } & (
-  | { type: "send_gmail_drafts"; params: { account: string; draftIds: string[] } }
+  | { type: "send_gmail_drafts"; params: { account: string; draftIds: string[]; requireRemoved?: string } }
   | { type: "activate_campaign"; params: { campaignId: string } }
   | { type: "unpause_members"; params: { campaignId: string; contactIds?: string[]; skipIfRepliedSince?: string } }
 );
@@ -34,12 +34,29 @@ export function dueActions(actions: ScheduledAction[], now: Date): ScheduledActi
     .sort((a, b) => Date.parse(a.runAt) - Date.parse(b.runAt));
 }
 
-async function sendDrafts(supabase: SupabaseClient, account: string, draftIds: string[]) {
+// requireRemoved: an approval line written at the top of each draft. Only
+// drafts where Jayme deleted it get sent; the rest stay in Drafts untouched.
+async function draftText(token: string, id: string): Promise<string | null> {
+  const r = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/drafts/${id}?format=full`, { headers: { Authorization: `Bearer ${token}` } });
+  if (r.status === 404) return null;
+  const d = await r.json();
+  const parts: string[] = [];
+  const walk = (p: any) => { if (p?.body?.data) parts.push(Buffer.from(p.body.data, "base64url").toString("utf8")); for (const c of p?.parts || []) walk(c); };
+  walk(d.message?.payload);
+  return parts.join("\n");
+}
+
+async function sendDrafts(supabase: SupabaseClient, account: string, draftIds: string[], requireRemoved?: string) {
   const { data: acct } = await supabase.from("connected_accounts").select("id").eq("email_address", account).single();
   if (!acct) throw new Error(`no connected account ${account}`);
   const token = await getAccessToken(supabase, acct.id);
-  const out = { sent: 0, gone: 0, failed: [] as string[] };
+  const out = { sent: 0, gone: 0, notApproved: 0, failed: [] as string[] };
   for (const id of draftIds) {
+    if (requireRemoved) {
+      const text = await draftText(token, id);
+      if (text === null) { out.gone++; continue; }
+      if (text.includes(requireRemoved)) { out.notApproved++; continue; }
+    }
     const res = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/drafts/send", {
       method: "POST",
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
@@ -80,7 +97,7 @@ export async function runScheduledActions(supabase: SupabaseClient, now = new Da
   const ran: { id: string; label: string; status: string }[] = [];
   for (const a of due) {
     try {
-      if (a.type === "send_gmail_drafts") a.result = await sendDrafts(supabase, a.params.account, a.params.draftIds);
+      if (a.type === "send_gmail_drafts") a.result = await sendDrafts(supabase, a.params.account, a.params.draftIds, a.params.requireRemoved);
       else if (a.type === "activate_campaign") {
         const { error } = await supabase.from("campaigns").update({ status: "active" }).eq("id", a.params.campaignId);
         if (error) throw error;

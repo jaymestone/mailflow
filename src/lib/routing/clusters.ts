@@ -34,9 +34,12 @@ export type Puzzle = {
 
 export const ROUTING_SNAPSHOT_KEY = "routing_snapshot";
 export const ROUTING_CLOSED_KEY = "routing_closed"; // [{ artist, venue, note }] — dates Jayme isn't routing around
-export type Closed = { artist: string; venue: string; note?: string };
-export const isClosed = (s: { artist: string; venue: string }, closed: Closed[]) =>
-  closed.some((c) => c.artist.toLowerCase() === s.artist.toLowerCase() && s.venue.toLowerCase().includes(c.venue.toLowerCase()));
+// Close one stop (venue) or a whole run (from/to, ISO dates) for an artist.
+export type Closed = { artist: string; venue?: string; from?: string; to?: string; note?: string };
+export const isClosed = (s: { artist: string; venue: string; start: string }, closed: Closed[]) =>
+  closed.some((c) => c.artist.toLowerCase() === s.artist.toLowerCase()
+    && (!c.venue || s.venue.toLowerCase().includes(c.venue.toLowerCase()))
+    && (!c.from || s.start >= c.from) && (!c.to || s.start <= c.to));
 export const CLUSTER_MILES = 150;
 export const ANCHOR_MILES = 200;
 const PIECES = new Set(["if_routing", "artist_no_date", "specific_date"]);

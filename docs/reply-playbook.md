@@ -33,7 +33,7 @@
 
 **No em dashes in hand-written replies.** Em dashes appear only in his bulk template.
 
-**Exclamation marks are rare.** Use at most one, usually on a closing goodwill line or a celebratory opener.
+**Use at least one exclamation mark in every email, and keep it to one or two.** It usually goes on the thanks: "Thanks so much for getting back to me!" Other natural spots are a celebratory opener ("Wonderful!") or a closing goodwill line. Jayme confirmed this rule on Oct 18 2026. In his real emails, about 4 of 5 "Thanks so much" lines end with "!". Of the emails that use them, 92% have exactly one. Never put one on every sentence.
 
 ---
 
@@ -71,7 +71,7 @@
 
 | Situation | Opener |
 |---|---|
-| Default (most replies, including warm ones) | **"Hi [First name],"** on its own line, then the first body line is usually **"Thanks so much for [what they did]."** or "Thanks so much!" |
+| Default (most replies, including warm ones) | **"Hi [First name],"** on its own line, then the first body line is usually **"Thanks so much for [what they did]!"** or "Thanks so much!" |
 | Someone he knows is re-engaging after a gap | "Good to hear from you, [Name]." (he uses this less than you'd think; in his edits he changed AI "Good to hear from you" openers back to "Hi X," + "Thanks so much…") |
 | People he clearly has history with | "So good to hear from you, Martha." |
 | Same, slightly brighter | "Great to hear from you, Barry." |
@@ -86,7 +86,7 @@
 
 **Sign-offs.** Every reply from stone@ ends with **"Kindly,"** and his ◙◙◙ signature block. The drafter adds both automatically, so never write a sign-off in the body.
 - The body usually ends on the question.
-- Optionally, a last line of **"Thanks so much!"** or **"Thanks so much."** (about 13 of 60 replies).
+- Optionally, a last line of **"Thanks so much!"** (about 13 of 60 replies).
 - **"Happy to chat anytime."** is a common last line in follow-ups (5 of 8 edited drafts; he *added* it once).
   - Drop it when the email already ends on a direct ask. He deleted it where the email ended "do let me know if you have specific dates for us to consider."
 - "Good things," belongs to his campaign templates, not live replies.

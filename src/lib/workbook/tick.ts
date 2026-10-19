@@ -1,4 +1,4 @@
-import { findPuzzles, ROUTING_SNAPSHOT_KEY, type PuzzleLead, type Stop as CalStop } from "@/lib/routing/clusters";
+import { findPuzzles, isClosed, ROUTING_CLOSED_KEY, ROUTING_SNAPSHOT_KEY, type Closed, type PuzzleLead, type Stop as CalStop } from "@/lib/routing/clusters";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { batchClear, batchGet, batchUpdate, batchUpdateValues, getSheetTitles, sheetsConfigured, type Cell } from "./sheets";
 import { MASTER_SPREADSHEET_ID as SHEET, SHEET_ROSTER, workbookTab } from "./roster";
@@ -650,7 +650,11 @@ export async function runWorkbookTick(supabase: SupabaseClient, opts: { now?: Da
   const puzzleLeads: PuzzleLead[] = view
     .filter((v) => v.coord)
     .map((v) => ({ id: v.c.id, venue: v.lead.venue, city: v.lead.city, state: v.lead.state, coord: v.coord!, interest: v.lead.interest, artists: v.lead.artists, window: v.lead.window, fee: v.lead.fee, pitchedRecently: v.c.last_direction === "outbound" && now.getTime() - Date.parse(v.c.last_message_at ?? "") <= 21 * 864e5 }));
-  const snapshot = { updated: now.toISOString(), puzzles: findPuzzles(puzzleLeads, allStops, today), stops: allStops.filter((s) => s.end >= today) };
+  // Runs Jayme has closed (e.g. Rakish passing through Mars Hill between
+  // Arizona and the Northeast) aren't offered as anchors anywhere.
+  const closed = ((await supabase.from("app_settings").select("value").eq("key", ROUTING_CLOSED_KEY).maybeSingle()).data?.value ?? []) as Closed[];
+  const openStops = allStops.filter((s) => s.end >= today && !isClosed(s, closed));
+  const snapshot = { updated: now.toISOString(), puzzles: findPuzzles(puzzleLeads, openStops, today), stops: openStops };
   const { error: snapErr } = await supabase.from("app_settings").upsert({ key: ROUTING_SNAPSHOT_KEY, value: snapshot }, { onConflict: "key" });
   if (snapErr) result.errors.push(`routing snapshot: ${snapErr.message}`);
   result.puzzles = snapshot.puzzles.length;

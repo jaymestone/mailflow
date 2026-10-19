@@ -33,6 +33,10 @@ export type Puzzle = {
 };
 
 export const ROUTING_SNAPSHOT_KEY = "routing_snapshot";
+export const ROUTING_CLOSED_KEY = "routing_closed"; // [{ artist, venue, note }] — dates Jayme isn't routing around
+export type Closed = { artist: string; venue: string; note?: string };
+export const isClosed = (s: { artist: string; venue: string }, closed: Closed[]) =>
+  closed.some((c) => c.artist.toLowerCase() === s.artist.toLowerCase() && s.venue.toLowerCase().includes(c.venue.toLowerCase()));
 export const CLUSTER_MILES = 150;
 export const ANCHOR_MILES = 200;
 const PIECES = new Set(["if_routing", "artist_no_date", "specific_date"]);
@@ -105,7 +109,8 @@ function describe(group: PuzzleLead[], stops: Stop[], today: string): Puzzle {
     move = `${byArtist[0].count} want ${art} with no date yet. Ask ${best.venue} for an offer to anchor a run${windows[0] ? ` (${windows[0]})` : ""}, then route the rest around it.`;
   } else {
     const best = [...group].sort((x, y) => (y.fee ?? 0) - (x.fee ?? 0) || Number(y.interest === "specific_date") - Number(x.interest === "specific_date"))[0];
-    move = `${routing || group.length} want roster artists when someone's in the area, but there's no anchor yet. Seed it: ask ${best.venue} for a budget range or which artists interest them most.`;
+    const n = routing || group.length;
+    move = `${n} ${n === 1 ? "wants" : "want"} roster artists when someone's in the area, but there's no anchor yet. Seed it: ask ${best.venue} for a budget range or which artists interest them most.`;
   }
   return {
     area,

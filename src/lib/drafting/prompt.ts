@@ -4,6 +4,7 @@
 // to Jayme's voice and booking strategy (docs/reply-playbook.md).
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
+import { stopsNear, type Puzzle, type Stop } from "@/lib/routing/clusters";
 
 export const BASE_SYSTEM = `You draft email replies for Jayme Stone, a booking agent (Jayme Stone Agency), replying to venue presenters and festival bookers who wrote back to him. Jayme will review every draft before it is sent.
 
@@ -48,4 +49,45 @@ export function examplesFor(context: string, n = 12): string {
 export function systemPrompt(): string {
   const p = join(process.cwd(), "docs", "reply-playbook.md");
   return existsSync(p) ? `${BASE_SYSTEM}\n\n=== JAYME'S REPLY PLAYBOOK (follow this closely; it overrides general guidance above where they differ) ===\n\n${readFileSync(p, "utf8")}` : BASE_SYSTEM;
+}
+
+// Past shows by roster artists (docs/venue-history.json, built from each
+// artist's folder, the agency site's Performance Highlights, Bandsintown and
+// web research). Venues ask "have they played here before?" a lot, so the
+// drafter gets every past show in the venue's state/province.
+type Show = { artist: string; date: string; venue: string; city: string; state: string; country: string; event: string; kind?: string };
+let historyCache: Show[] | null = null;
+function history(): Show[] {
+  if (historyCache) return historyCache;
+  const p = join(process.cwd(), "docs", "venue-history.json");
+  historyCache = existsSync(p) ? JSON.parse(readFileSync(p, "utf8")) : [];
+  return historyCache!;
+}
+export function historyFor(loc: { city?: string | null; state?: string | null; country?: string | null } | null | undefined, perArtist = 15): string {
+  const st = (loc?.state || "").trim().toLowerCase();
+  if (!st) return "";
+  const cn = (c?: string | null) => { const x = (c || "").trim().toLowerCase(); return /^(us|usa|u\.s\.a?\.?|united states)/.test(x) ? "us" : /^(ca|canada)$/.test(x) ? "ca" : x; };
+  const hits = history().filter((s) => s.state.toLowerCase() === st && (!loc?.country || !s.country || cn(s.country) === cn(loc.country)));
+  if (!hits.length) return `\n\nRoster history: no past shows on record in ${loc!.state} for any artist (records may be incomplete — don't claim they've never played there; flag NEEDS_YOU if it matters).`;
+  const by = new Map<string, Show[]>();
+  for (const s of hits) by.set(s.artist, [...(by.get(s.artist) || []), s]);
+  const lines = [...by].map(([a, ss]) => `- ${a}: ${ss.slice(0, perArtist).map((s) => `${s.venue}${s.event && s.event !== s.venue ? ` (${s.event})` : ""}, ${s.city}${s.date ? ` ${s.date.slice(0, 4)}` : ""}${s.kind === "opener" ? " (as opener)" : ""}`).join("; ")}${ss.length > perArtist ? `; +${ss.length - perArtist} more` : ""}`);
+  return `\n\nRoster history — past shows in ${loc!.state} (venue is in ${loc!.city || "?"}, ${loc!.state}). Use these if the venue asks whether an artist has played the area, or when a local credential would help; don't list them unprompted:\n${lines.join("\n")}`;
+}
+
+// Routing context from the workbook tick's snapshot (app_settings
+// "routing_snapshot"): upcoming calendar dates near this venue, and the
+// cluster it belongs to, so a reply can say "Lily's in Tampa March 5 —
+// could you do the 6th or 7th?" instead of a generic "let me know".
+export function routingFor(snapshot: { stops: Stop[]; puzzles: Puzzle[] } | null, conversationId: string, at: { lat?: number | null; lng?: number | null } | null | undefined, today = new Date().toISOString().slice(0, 10)): string {
+  if (!snapshot) return "";
+  const parts: string[] = [];
+  if (at?.lat != null && at?.lng != null) {
+    const near = stopsNear(snapshot.stops, { lat: at.lat, lng: at.lng }, today).slice(0, 8);
+    if (near.length) parts.push(`Upcoming roster dates within 200 miles (from Jayme's tour calendar; Confirmed/Booked are real, Hold/Inquiry are not public — never mention those venues by name):\n${near.map((s) => `- ${s.artist}: ${s.start}${s.end !== s.start ? `–${s.end}` : ""} ${/^confirmed|booked/i.test(s.status) ? s.venue : "(tentative)"}, ${s.city} ${s.state} — ${s.status}, ${s.miles} mi`).join("\n")}`);
+  }
+  const p = snapshot.puzzles.find((x) => x.venues.some((v) => v.id === conversationId));
+  if (p) parts.push(`This venue is one of ${p.venues.length} in the ${p.area} that are interested if someone's in the area${p.byArtist.length ? ` (most asked about: ${p.byArtist.slice(0, 3).map((a) => `${a.artist} ×${a.count}`).join(", ")})` : ""}. Jayme's next move for that cluster: ${p.move}`);
+  if (!parts.length) return "";
+  return `\n\nRouting context — use it when the venue says "let me know when someone's in the area", asks about dates, or a nearby date would make a natural offer. Propose real dates only next to a Confirmed/Booked date. If there's nothing to offer yet, don't mention routing:\n${parts.join("\n\n")}`;
 }

@@ -1,3 +1,4 @@
+import { findPuzzles, ROUTING_SNAPSHOT_KEY, type PuzzleLead, type Stop as CalStop } from "@/lib/routing/clusters";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { batchClear, batchGet, batchUpdate, batchUpdateValues, getSheetTitles, sheetsConfigured, type Cell } from "./sheets";
 import { MASTER_SPREADSHEET_ID as SHEET, SHEET_ROSTER, workbookTab } from "./roster";
@@ -94,12 +95,14 @@ export type WorkbookTickResult = {
   notesRefreshed: number;
   leads: number;
   routingRows: number;
+  puzzles?: number;
   errors: string[];
 };
 
 type Conv = {
   id: string;
   thread_key: string;
+  last_direction?: string | null;
   venue: string | null;
   region: string | null;
   fee_amount: number | null;
@@ -193,7 +196,7 @@ export async function runWorkbookTick(supabase: SupabaseClient, opts: { now?: Da
     await readAll<Conv>(
       supabase,
       "conversations",
-      "id, thread_key, venue, region, fee_amount, last_message_at, contact_id, gmail_thread_ids, summarized_at, sheet_artists, sheet_dates, sheet_window, sheet_interest, sheet_routing_area, sheet_note, sheet_next_step, sheet_assigned_artist, sheet_placements, sheet_synced_at",
+      "id, thread_key, venue, region, fee_amount, last_message_at, last_direction, contact_id, gmail_thread_ids, summarized_at, sheet_artists, sheet_dates, sheet_window, sheet_interest, sheet_routing_area, sheet_note, sheet_next_step, sheet_assigned_artist, sheet_placements, sheet_synced_at",
       (q) => q.eq("is_live", true),
     )
   ).filter((c) => c.sheet_interest && c.sheet_interest !== "declined" && !OWN.test(c.thread_key.split("::")[0]));
@@ -305,6 +308,8 @@ export async function runWorkbookTick(supabase: SupabaseClient, opts: { now?: Da
   const routingHot: number[] = []; // rows whose venue said "if you're routing nearby"
   // Every run on every calendar, for the Leads tab's "Near a booked date".
   const runIndex: { artist: string; when: string; coords: Coord[]; confirmed: boolean }[] = [];
+  // Every stop on every calendar, for routing puzzles and the reply drafter.
+  const allStops: CalStop[] = [];
   for (const [artist, wb] of books) {
     type Day = { venue: string; status: string; city: string; state: string };
     const cal = new Map<string, Day>();
@@ -335,7 +340,10 @@ export async function runWorkbookTick(supabase: SupabaseClient, opts: { now?: Da
       // The day's own city first: a fuzzy name match can land on a venue's
       // agent elsewhere (Old Settlers in Austin matched an agent in Colorado).
       const where = cityCoord.get(key(day.city, day.state)) ?? (day.city ? undefined : view.find((v) => sameVenue(v.lead.venue, day.venue))?.coord);
-      if (where) stops.push({ i, j, day, where });
+      if (where) {
+        stops.push({ i, j, day, where });
+        allStops.push({ artist, start: isos[i], end: isos[j], venue: day.venue, city: day.city, state: day.state, status: day.status, coord: where });
+      }
     }
     // Runs: stops within RUN_GAP_DAYS and RUN_MILES of the one before are one
     // block. Cottonwood (Fort Collins) then two Chautauqua nights (Boulder)
@@ -637,5 +645,15 @@ export async function runWorkbookTick(supabase: SupabaseClient, opts: { now?: Da
       ]),
     ]);
   }
+  // ---- 4. Routing puzzles (clusters of interest) + calendar stops ------------
+  // Read by the Monday morning briefing and the reply drafter.
+  const puzzleLeads: PuzzleLead[] = view
+    .filter((v) => v.coord)
+    .map((v) => ({ id: v.c.id, venue: v.lead.venue, city: v.lead.city, state: v.lead.state, coord: v.coord!, interest: v.lead.interest, artists: v.lead.artists, window: v.lead.window, fee: v.lead.fee, pitchedRecently: v.c.last_direction === "outbound" && now.getTime() - Date.parse(v.c.last_message_at ?? "") <= 21 * 864e5 }));
+  const snapshot = { updated: now.toISOString(), puzzles: findPuzzles(puzzleLeads, allStops, today), stops: allStops.filter((s) => s.end >= today) };
+  const { error: snapErr } = await supabase.from("app_settings").upsert({ key: ROUTING_SNAPSHOT_KEY, value: snapshot }, { onConflict: "key" });
+  if (snapErr) result.errors.push(`routing snapshot: ${snapErr.message}`);
+  result.puzzles = snapshot.puzzles.length;
+
   return result;
 }

@@ -14,7 +14,7 @@
 - "Yes, I'd love to chat about getting Charlie & The Tropicales to Lake City."
 - "I'm always happy to try and make things work for everybody!"
 
-**Use plain industry words.** He says "routing," "ideal dates," "typically get," "budget," "upper limit," and "accommodations."
+**Use plain industry words.** He says "routing," "ideal dates," "typically get," "budget," and "accommodations."
 
 **Avoid:**
 - "Unfortunately"
@@ -192,11 +192,14 @@ The aim of an early reply is to narrow things down. He wants either specific art
 
 **Ask budget when no fee has been discussed and they're interested.**
 - "What's your budget range?"
+- "Could you let me know what your budget is?"
+- "Could you let me know what works for your budget?"
 
 Frame it as something he needs to plan, not as a service he's offering. He made exactly that change in one edit. He also kept the opportunity and the budget question as separate beats.
 
 **When they say the fee is too high, ask for their ceiling.** Don't name a lower number yourself.
-- "Would you mind letting me know your upper limit?"
+- "Well, let me know what your upper end might be."
+- Never say "upper limit". That phrase came from a Google AI draft, and Jayme doesn't use it.
 
 **Discount only with a routing reason, and keep it conditional.**
 - "The routing is really perfect, so we might be able to accommodate a lower-than-usual fee."
@@ -259,7 +262,7 @@ Frame it as something he needs to plan, not as a service he's offering. He made 
 **Replying to a "no":**
 - Open plainly ("Hi Mark,").
 - Don't argue and don't apologize.
-- If a fee caused the no, ask for their upper limit or offer a routing-based concession only when the concession is already established (Section 6).
+- If a fee caused the no, ask what their upper end might be or offer a routing-based concession only when the concession is already established (Section 6).
 - Otherwise ask for something concrete: "do let me know if you have specific dates for us to consider."
 
 **Parking a lead.** He has a templated park-and-release note signed "Good things," with his full signature. The notes don't include its text, so don't recreate it. Flag NEEDS_YOU when a lead should be parked.

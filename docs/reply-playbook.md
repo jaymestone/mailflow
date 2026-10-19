@@ -136,11 +136,16 @@
 
 ## 5. Routing & dates
 
-**Propose dates only when they come from real routing** (an anchor date or tour already in the thread). Otherwise ask for *their* open dates or what they could offer, and don't invent placeholder dates. In 5 of 58 edits he swapped proposed dates for "What dates are you looking at?" or an offer question.
-
-**When you do propose, offer two concrete dates, not ranges like "summer" or "whenever."**
-- "Our ideal dates would be July 14 or 16. Do either of those work?"
-- "How's March 4-6 or March 11-13?"
+**Match how specific the dates are to the kind of push.** Jayme clarified this on Oct 18 2026.
+- **Routing around an anchor date.** Examples are Charlie & The Tropicales around Green Box in Colorado, or Amanda Pascali around Baton Rouge. Name the specific dates the artist is free near the anchor:
+  - "Our ideal dates would be July 14 or 16. Do either of those work?"
+  - "How's March 4-6 or March 11-13?"
+- **A whole season or region.** Naming the window is fine: "THE LITTLE MERCIES will be touring out west in August 2027."
+- **A general or no-tour-yet conversation.** Speak broadly, or ask how they book:
+  - "[Artist] is available next season."
+  - "Let me know what specific dates you have."
+  - "Are there certain months that you book, or certain days of the week you prefer?"
+- **Never invent dates or availability.** Specific dates must come from routing in the thread or from Jayme. If none exist, use the season-level or ask-them forms above. In 5 of 58 edits, he replaced proposed dates with a question about their dates or an offer.
 
 **Put dates before fee.** The venue pictures the show before the price.
 
@@ -150,7 +155,7 @@
 **Confirm fit simply when dates already match.**
 - "Those dates should work for the Little Mercies."
 
-**Give a concrete window, not open-ended flexibility.** He rewrote an AI draft that offered vague availability into "Can we look at sometime after Oct 28?" Only use a window that appears in the thread or that he has provided. Otherwise flag NEEDS_YOU.
+**For calls and meetings, give a real window.** He rewrote an AI draft offering vague call availability into "Can we look at sometime after Oct 28?" Use only a window that appears in the thread or that he has given. Otherwise flag NEEDS_YOU.
 
 **Use routing as the reason for flexibility** (see Fees).
 
@@ -276,7 +281,7 @@ Frame it as something he needs to plan, not as a service he's offering. He made 
 | Three questions in one email | One ask |
 | Offering extra work ("I'll put together some ideas…") | Cut it; add a roster link instead |
 | "I'll check back" | Ask for dates or a decision |
-| Vague, open-ended availability | A concrete window ("after Oct 28") |
+| Vague call availability ("anytime") | A real window from the thread ("after Oct 28") |
 | Budget ask framed as a favor to them | Framed as what he needs to plan |
 | Paraphrasing the artist's tagline | Use the artist's exact wording |
 | Fancier phrasing | Plainer words |
@@ -311,6 +316,10 @@ He approved strategy in all six non-rewritten drafts in this situation. Expect o
 - **A direct question you can't answer from the thread.** Example: "Any new music coming from Summer?"
 
 When flagging, still draft everything you can. Mark the missing fact in brackets so he only fills one slot, for example: `[NEEDS_YOU: his available call window]`.
+
+---
+
+**"Have they played here before?"** When a "Roster history" list comes with the thread, answer from it with specifics, like this: "Lily played the Freight & Salvage in Berkeley and Sweetwater Music Hall in Mill Valley." Favour the most recent shows and the best-known venues, and keep it to 2–4 names. If the list has nothing for that area, don't say they've never played there. Say you'll check, and flag NEEDS_YOU.
 
 ---
 

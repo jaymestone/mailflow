@@ -275,6 +275,12 @@ export async function processOneMessage(
     }
 
     const email = await fetchGmailMessage(accessToken, messageId);
+    // An unsent draft is not activity. Drafts written into a thread (by Jayme
+    // or by the reply drafter) were being recorded as manual sends from his
+    // own address, which made every drafted thread look like he'd just
+    // written -- 95 of them on 2026-10-17. Once a draft is actually sent it
+    // arrives again carrying SENT and is recorded then.
+    if (email.labelIds.includes("DRAFT")) return "skipped";
     if (email.labelIds.includes("SENT")) {
       // Our own outbound copy: still skipped for classification, but now
       // recorded as thread activity first, so the conversation pass can

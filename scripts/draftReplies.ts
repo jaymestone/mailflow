@@ -21,7 +21,14 @@ const dry = args.includes("--dry");
 // --followups: threads where Jayme wrote last more than --days ago with no
 // answer; drafts a short check-in instead of a reply.
 const followups = args.includes("--followups");
-const OWN = /@jaymestone(agency)?\.com$/i;
+// --catchup: same selection as --followups, but drafts REPLIES for the threads
+// where Gmail shows the venue actually wrote last (Mailflow still has Jayme
+// last). --exclude "Name,Name" leaves venues out by name.
+const catchup = args.includes("--catchup");
+// --venues "a,b": only conversations whose venue contains one of these.
+const onlyVenues = (args.includes("--venues") ? args[args.indexOf("--venues") + 1] : "").split(",").map((x) => x.trim().toLowerCase()).filter(Boolean);
+const exclude = new Set((args.includes("--exclude") ? args[args.indexOf("--exclude") + 1] : "").split(",").map((x) => x.trim().toLowerCase()).filter(Boolean));
+const OWN = /@jaymestone(agency)?\.com$|@followupthen\.com$|^noreply@|^no-reply@/i; // Jayme's own addresses + his reminder service
 
 const SYSTEM = `You draft email replies for Jayme Stone, a booking agent (Jayme Stone Agency), replying to venue presenters and festival bookers who wrote back to him. Jayme will review every draft before it is sent.
 
@@ -69,9 +76,11 @@ async function pool<T>(items: T[], n: number, fn: (x: T) => Promise<void>) {
   const token = await getAccessToken(supabase, acct!.id);
   const since = new Date(Date.now() - days * 864e5).toISOString();
   let cq = supabase.from("conversations").select("id,venue,artist,status,status_override,thread_key,gmail_thread_ids,last_message_at,contact_id,contacts(email)").eq("is_live", true);
-  cq = followups ? cq.eq("last_direction", "outbound").lt("last_message_at", since) : cq.eq("last_direction", "inbound").gte("last_message_at", since);
+  cq = followups || catchup ? cq.eq("last_direction", "outbound").lt("last_message_at", since) : cq.eq("last_direction", "inbound").gte("last_message_at", since);
   const { data: convs } = await cq.order("last_message_at", { ascending: false });
   let todo = (convs || []).filter((c) => !/@jaymestone(agency)?\.com::/.test(c.thread_key) && (c.status_override || c.status) !== "parked");
+  todo = todo.filter((c: any) => !exclude.has(String(c.venue || "").toLowerCase()));
+  if (onlyVenues.length) todo = todo.filter((c: any) => onlyVenues.some((v) => String(c.venue || "").toLowerCase().includes(v)));
   if (followups) {
     // Don't stack a check-in on top of a campaign email this venue just got or is about to get.
     const GEN = /@(gmail|yahoo|hotmail|aol|outlook|icloud|comcast|me|msn|live|mac|earthlink|sbcglobal|att|bellsouth)\./i;
@@ -91,8 +100,8 @@ async function pool<T>(items: T[], n: number, fn: (x: T) => Promise<void>) {
   let pageToken = "";
   do { const d = await gmail(token, `drafts?maxResults=500${pageToken ? `&pageToken=${pageToken}` : ""}`); for (const x of d.drafts || []) drafted.add(x.message.threadId); pageToken = d.nextPageToken || ""; } while (pageToken);
 
-  const out: { venue: string; draftId?: string; needsYou?: string; skipped?: string }[] = [];
-  await pool(todo, 6, async (c) => {
+  const out: { venue: string; draftId?: string; threadId?: string; needsYou?: string; skipped?: string; body?: string; createdAt?: string }[] = [];
+  await pool(todo, args.includes("--slow") ? 2 : 6, async (c) => {
     try {
       const ids: string[] = c.gmail_thread_ids || [];
       const { data: inb } = await supabase.from("inbound_messages").select("gmail_thread_id,received_at").eq("connected_account_id", acct!.id).in("gmail_thread_id", ids).order("received_at", { ascending: false }).limit(1);
@@ -105,6 +114,7 @@ async function pool<T>(items: T[], n: number, fn: (x: T) => Promise<void>) {
       const jaymeLast = addrs(last.from).some((a) => OWN.test(a));
       if (!followups && jaymeLast) { out.push({ venue: c.venue, skipped: "Jayme wrote last in Gmail" }); return; }
       if (followups && !jaymeLast) { out.push({ venue: c.venue, skipped: "venue wrote last — covered by replies" }); return; }
+      if (catchup && jaymeLast) { out.push({ venue: c.venue, skipped: "Jayme wrote last (follow-up case)" }); return; }
       const transcript = msgs.slice(-6).map((m) => `From: ${m.from}\nDate: ${m.date}\n\n${m.text}`).join("\n\n-----\n\n");
       const res = await anthropic.messages.create({ model: "claude-opus-5-5", max_tokens: 2000, thinking: { type: "adaptive" }, system: SYSTEM, messages: [{ role: "user", content: `Venue: ${c.venue}${c.artist ? ` (artist discussed: ${c.artist})` : ""}\nThread (oldest first):\n\n${transcript}\n\n${followups ? `Jayme wrote the last message ${Math.round((Date.now() - Date.parse(c.last_message_at)) / 864e5)} days ago and hasn't heard back. Draft a short, friendly check-in (1–3 sentences) that picks up exactly where things were left — e.g. "Just checking back to see if you've had a chance to consider…" — without repeating the pitch. If Jayme's last message was a sign-off like "I'll check in when someone on the roster is headed your way" and there's nothing specific to follow up on, answer SKIP.` : "Draft Jayme's reply to the last message."}` }] });
       const textOut = res.content.filter((b: any) => b.type === "text").map((b: any) => b.text).join("").trim();
@@ -123,11 +133,13 @@ async function pool<T>(items: T[], n: number, fn: (x: T) => Promise<void>) {
         `--${boundary}`, "Content-Type: text/plain; charset=UTF-8", "Content-Transfer-Encoding: 8bit", "", `${approve}\n\n${toText(body)}\n\n${SIG}\n`,
         `--${boundary}`, "Content-Type: text/html; charset=UTF-8", "Content-Transfer-Encoding: 8bit", "", `<div dir="ltr"><div><b>${esc(approve)}</b></div><div><br></div>${toHtml(body)}<div><br></div><div>${SIG_HTML}</div></div>`, `--${boundary}--`, ""].join("\r\n");
       const d = await gmail(token, "drafts", { method: "POST", body: JSON.stringify({ message: { threadId, raw: Buffer.from(raw).toString("base64url") } }) });
-      out.push({ venue: c.venue, draftId: d.id, needsYou: /^none$/i.test(needs) ? undefined : needs });
+      out.push({ venue: c.venue, draftId: d.id, threadId, needsYou: /^none$/i.test(needs) ? undefined : needs, body, createdAt: new Date().toISOString() });
+      // Keep every original so Jayme's edits can be compared against it later.
+      await supabase.from("draft_originals").insert({ draft_id: d.id, thread_id: threadId, venue: c.venue, mode: catchup ? "catchup" : followups ? "followup" : "reply", needs_you: /^none$/i.test(needs) ? null : needs, body }).then(() => {}, () => {});
       console.log(`DRAFT ${c.venue}${/^none$/i.test(needs) ? "" : "  [NEEDS YOU: " + needs + "]"}`);
     } catch (e: any) { out.push({ venue: c.venue, skipped: "error: " + String(e?.message || e).slice(0, 160) }); }
   });
-  writeFileSync(followups ? ".draft-followups.json" : ".draft-replies.json", JSON.stringify(out, null, 1));
+  writeFileSync(catchup ? ".draft-catchup.json" : followups ? ".draft-followups.json" : ".draft-replies.json", JSON.stringify(out, null, 1));
   const made = out.filter((o) => o.draftId);
   console.log(`\n${made.length} drafts, ${made.filter((o) => o.needsYou).length} need a decision, ${out.length - made.length} skipped`);
   for (const o of out.filter((o) => o.skipped)) console.log(`  skipped ${o.venue}: ${o.skipped}`);

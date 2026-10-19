@@ -40,7 +40,11 @@ let routingSnap: any = null; // loaded in main from app_settings "routing_snapsh
 
 type Msg = { from: string; to: string; cc: string; date: string; subject: string; messageId: string; references: string; text: string };
 const header = (m: any, n: string) => (m.payload.headers || []).find((h: any) => h.name.toLowerCase() === n.toLowerCase())?.value || "";
-const plain = (p: any): string => { if (!p) return ""; if (p.mimeType === "text/plain" && p.body?.data) return Buffer.from(p.body.data, "base64url").toString("utf8"); for (const c of p.parts || []) { const t = plain(c); if (t) return t; } return ""; };
+// Plain text if the email has it, else the HTML part stripped to text
+// (HTML-only replies came through blank — Carbondale, Jasper, Lullaby, Oct 19).
+const part = (p: any, type: string): string => { if (!p) return ""; if (p.mimeType === type && p.body?.data) return Buffer.from(p.body.data, "base64url").toString("utf8"); for (const c of p.parts || []) { const t = part(c, type); if (t) return t; } return ""; };
+const htmlText = (h: string) => h.replace(/<(style|script)[\s\S]*?<\/\1>/gi, "").replace(/<br\s*\/?>|<\/(p|div|li|tr|h\d)>/gi, "\n").replace(/<blockquote[\s\S]*$/i, "").replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&#39;|&rsquo;/g, "'").replace(/&quot;/g, '"').replace(/\n{3,}/g, "\n\n").trim();
+const plain = (p: any): string => part(p, "text/plain") || htmlText(part(p, "text/html"));
 const addrs = (v: string) => (v.match(/[^\s<>,;"]+@[^\s<>,;"]+/g) || []).map((a) => a.toLowerCase());
 const esc = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 const toText = (b: string) => b.replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, "$1 <$2>");

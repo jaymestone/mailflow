@@ -56,12 +56,17 @@ async function draftText(token: string, id: string): Promise<string | null> {
   return parts.join("\n");
 }
 
-export async function sendDrafts(supabase: SupabaseClient, account: string, draftIds: string[], requireRemoved?: string) {
+// deadline (epoch ms): stop starting new drafts after it and report
+// partial, so a big batch spans several 15-minute ticks instead of being
+// killed by the 60s function limit (Oct 19: the 11am batch never finished).
+// Re-running is safe — sent drafts are gone (404).
+export async function sendDrafts(supabase: SupabaseClient, account: string, draftIds: string[], requireRemoved?: string, deadline = Infinity) {
   const { data: acct } = await supabase.from("connected_accounts").select("id").eq("email_address", account).single();
   if (!acct) throw new Error(`no connected account ${account}`);
   const token = await getAccessToken(supabase, acct.id);
-  const out = { sent: 0, gone: 0, notApproved: 0, failed: [] as string[] };
+  const out = { sent: 0, gone: 0, notApproved: 0, failed: [] as string[], partial: false };
   for (const id of draftIds) {
+    if (Date.now() > deadline) { out.partial = true; break; }
     if (requireRemoved) {
       let text: string | null;
       try { text = await draftText(token, id); } catch (e) { out.failed.push(`${id}: ${e instanceof Error ? e.message : e} (not sent)`); continue; }
@@ -101,7 +106,8 @@ async function unpause(supabase: SupabaseClient, p: { campaignId: string; contac
   return { resumed: resume.length, keptPausedBecauseReplied: replied.size };
 }
 
-export async function runScheduledActions(supabase: SupabaseClient, now = new Date()) {
+export async function runScheduledActions(supabase: SupabaseClient, now = new Date(), budgetMs = 40_000) {
+  const deadline = Date.now() + budgetMs;
   const { data: row } = await supabase.from("app_settings").select("value").eq("key", SCHEDULED_ACTIONS_KEY).maybeSingle();
   const actions: ScheduledAction[] = Array.isArray(row?.value) ? (row!.value as ScheduledAction[]) : [];
   const due = dueActions(actions, now);
@@ -109,26 +115,33 @@ export async function runScheduledActions(supabase: SupabaseClient, now = new Da
 
   const ran: { id: string; label: string; status: string }[] = [];
   for (const a of due) {
+    if (Date.now() > deadline) break; // the rest wait for the next tick
+    let partial = false;
     try {
-      if (a.type === "send_gmail_drafts") a.result = await sendDrafts(supabase, a.params.account, a.params.draftIds, a.params.requireRemoved);
-      else if (a.type === "activate_campaign") {
+      if (a.type === "send_gmail_drafts") {
+        const r = await sendDrafts(supabase, a.params.account, a.params.draftIds, a.params.requireRemoved, deadline);
+        partial = r.partial;
+        a.result = r;
+      } else if (a.type === "activate_campaign") {
         const { error } = await supabase.from("campaigns").update({ status: "active" }).eq("id", a.params.campaignId);
         if (error) throw error;
         a.result = { activated: a.params.campaignId };
       } else if (a.type === "unpause_members") a.result = await unpause(supabase, a.params);
-      a.status = "done";
+      a.status = partial ? "pending" : "done";
     } catch (err) {
       a.status = "failed";
       a.result = { error: err instanceof Error ? err.message : String(err) };
     }
-    a.doneAt = now.toISOString();
-    ran.push({ id: a.id, label: a.label, status: a.status });
+    if (a.status !== "pending") a.doneAt = new Date().toISOString();
+    ran.push({ id: a.id, label: a.label, status: partial ? "partial" : a.status });
+    await save(supabase, a); // persist each one, so a timeout can't lose finished work
   }
-  // Re-read before writing so an action added while this ran isn't lost.
+  return { due: due.length, ran };
+}
+
+// Re-read before writing so an action added while this ran isn't lost.
+async function save(supabase: SupabaseClient, a: ScheduledAction) {
   const { data: fresh } = await supabase.from("app_settings").select("value").eq("key", SCHEDULED_ACTIONS_KEY).maybeSingle();
   const latest: ScheduledAction[] = Array.isArray(fresh?.value) ? (fresh!.value as ScheduledAction[]) : [];
-  const byId = new Map(due.map((a) => [a.id, a]));
-  const merged = latest.map((a) => byId.get(a.id) ?? a);
-  await supabase.from("app_settings").upsert({ key: SCHEDULED_ACTIONS_KEY, value: merged }, { onConflict: "key" });
-  return { due: due.length, ran };
+  await supabase.from("app_settings").upsert({ key: SCHEDULED_ACTIONS_KEY, value: latest.map((x) => (x.id === a.id ? a : x)) }, { onConflict: "key" });
 }

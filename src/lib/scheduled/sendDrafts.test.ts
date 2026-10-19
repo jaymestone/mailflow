@@ -29,4 +29,10 @@ describe("sendDrafts with an approval line", () => {
     expect(sent).toEqual(["d1"]);
     expect(out.notApproved).toBe(1);
   }, 30000);
+  it("stops at the deadline and reports partial", async () => {
+    vi.stubGlobal("fetch", async () => new Response("{}", { status: 200 }));
+    const out = await sendDrafts(supabase, "x@y", ["d1", "d2"], "DELETE THIS LINE", 0);
+    expect(out.partial).toBe(true);
+    expect(out.sent).toBe(0);
+  });
 });

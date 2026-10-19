@@ -50,3 +50,8 @@ scripts/.jayme-inbox-extract.json
 .draft-replies.json
 .draft-followups.json
 .draft-catchup.json
+.voice-pairs.json
+.voice-corpus.json
+.voice-notes.json
+.voice-eval*.json
+.voice-judge.json

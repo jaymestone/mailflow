@@ -115,6 +115,13 @@ async function pool<T>(items: T[], n: number, fn: (x: T) => Promise<void>) {
       if (!followups && jaymeLast) { out.push({ venue: c.venue, skipped: "Jayme wrote last in Gmail" }); return; }
       if (followups && !jaymeLast) { out.push({ venue: c.venue, skipped: "venue wrote last — covered by replies" }); return; }
       if (catchup && jaymeLast) { out.push({ venue: c.venue, skipped: "Jayme wrote last (follow-up case)" }); return; }
+      // Check-ins only when Jayme's own last message (per Gmail, not Mailflow's
+      // record) is older than --days — a nudge days after his own follow-up
+      // reads as a duplicate (ArtYard, Oct 2026).
+      if (followups && jaymeLast) {
+        const lastMs = Date.parse(last.date);
+        if (!Number.isNaN(lastMs) && Date.now() - lastMs < days * 864e5) { out.push({ venue: c.venue, skipped: "Jayme followed up recently" }); return; }
+      }
       const transcript = msgs.slice(-6).map((m) => `From: ${m.from}\nDate: ${m.date}\n\n${m.text}`).join("\n\n-----\n\n");
       const res = await anthropic.messages.create({ model: "claude-opus-5-5", max_tokens: 2000, thinking: { type: "adaptive" }, system: SYSTEM, messages: [{ role: "user", content: `Venue: ${c.venue}${c.artist ? ` (artist discussed: ${c.artist})` : ""}\nThread (oldest first):\n\n${transcript}\n\n${followups ? `Jayme wrote the last message ${Math.round((Date.now() - Date.parse(c.last_message_at)) / 864e5)} days ago and hasn't heard back. Draft a short, friendly check-in (1–3 sentences) that picks up exactly where things were left — e.g. "Just checking back to see if you've had a chance to consider…" — without repeating the pitch. If Jayme's last message was a sign-off like "I'll check in when someone on the roster is headed your way" and there's nothing specific to follow up on, answer SKIP.` : "Draft Jayme's reply to the last message."}` }] });
       const textOut = res.content.filter((b: any) => b.type === "text").map((b: any) => b.text).join("").trim();

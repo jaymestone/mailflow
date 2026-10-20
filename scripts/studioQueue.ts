@@ -25,6 +25,7 @@ const SLOTS = ["19", "20", "21"].flatMap((d) => [15, 18, 21].map((h) => `2026-10
   const { data } = await supabase.from("app_settings").select("value").eq("key", SCHEDULED_ACTIONS_KEY).maybeSingle();
   let actions: ScheduledAction[] = Array.isArray(data?.value) ? (data!.value as ScheduledAction[]) : [];
   const ids = new Set<string>();
+  let pruneTo: Set<string> | null = null;
   for (const a of actions) if (a.type === "send_gmail_drafts" && a.params.account === "stone@jaymestone.com" && a.params.requireRemoved?.includes(PREFIX)) a.params.draftIds.forEach((x) => ids.add(x));
   // Also every draft in stone@ that carries the approval line — only Claude's
   // drafts have it — so a drafting run killed before writing its output file
@@ -35,8 +36,13 @@ const SLOTS = ["19", "20", "21"].flatMap((d) => [15, 18, 21].map((h) => `2026-10
     const g = async (p: string) => { for (let k = 0; k < 6; k++) { const r = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/${p}`, { headers: { Authorization: `Bearer ${tok}` } }); if (r.ok) return r.json(); await new Promise((x) => setTimeout(x, 3000 * (k + 1))); } return null; };
     const list = await g("drafts?maxResults=500&q=" + encodeURIComponent(`"${PREFIX}"`));
     for (const d of list?.drafts || []) ids.add(d.id);
+    // Drop ids no longer in Drafts (sent or removed) so each slot only reads live ones.
+    const live = new Set<string>(); let pt = "";
+    do { const r = await g(`drafts?maxResults=500${pt ? `&pageToken=${pt}` : ""}`); for (const d of r?.drafts || []) live.add(d.id); pt = r?.nextPageToken || ""; } while (pt);
+    pruneTo = live;
   }
   for (const f of process.argv.slice(2)) if (existsSync(f)) for (const o of JSON.parse(readFileSync(f, "utf8"))) if (o.draftId) ids.add(o.draftId);
+  if (pruneTo) for (const id of [...ids]) if (!pruneTo.has(id)) ids.delete(id);
   const now = Date.now();
   actions = actions.filter((a) => !(a.label.startsWith(LABEL) && a.status === "pending"));
   for (const runAt of SLOTS.filter((s) => Date.parse(s) > now))

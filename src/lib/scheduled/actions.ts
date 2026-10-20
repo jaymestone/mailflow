@@ -64,9 +64,9 @@ export async function sendDrafts(supabase: SupabaseClient, account: string, draf
   const { data: acct } = await supabase.from("connected_accounts").select("id").eq("email_address", account).single();
   if (!acct) throw new Error(`no connected account ${account}`);
   const token = await getAccessToken(supabase, acct.id);
-  const out = { sent: 0, gone: 0, notApproved: 0, failed: [] as string[], partial: false };
-  for (const id of draftIds) {
-    if (Date.now() > deadline) { out.partial = true; break; }
+  const out = { sent: 0, gone: 0, notApproved: 0, failed: [] as string[], partial: false, remaining: [] as string[] };
+  for (const [i, id] of draftIds.entries()) {
+    if (Date.now() > deadline) { out.partial = true; out.remaining = draftIds.slice(i); break; }
     if (requireRemoved) {
       let text: string | null;
       try { text = await draftText(token, id); } catch (e) { out.failed.push(`${id}: ${e instanceof Error ? e.message : e} (not sent)`); continue; }
@@ -121,7 +121,10 @@ export async function runScheduledActions(supabase: SupabaseClient, now = new Da
       if (a.type === "send_gmail_drafts") {
         const r = await sendDrafts(supabase, a.params.account, a.params.draftIds, a.params.requireRemoved, deadline);
         partial = r.partial;
-        a.result = r;
+        // Carry on from where this tick stopped; sent/gone/unapproved ones
+        // aren't re-read every 15 minutes (Oct 19: 121 ids never got through).
+        if (partial) a.params = { ...a.params, draftIds: r.remaining };
+        a.result = { ...r, remaining: r.remaining.length };
       } else if (a.type === "activate_campaign") {
         const { error } = await supabase.from("campaigns").update({ status: "active" }).eq("id", a.params.campaignId);
         if (error) throw error;

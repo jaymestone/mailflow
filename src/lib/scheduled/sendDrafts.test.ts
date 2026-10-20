@@ -34,5 +34,6 @@ describe("sendDrafts with an approval line", () => {
     const out = await sendDrafts(supabase, "x@y", ["d1", "d2"], "DELETE THIS LINE", 0);
     expect(out.partial).toBe(true);
     expect(out.sent).toBe(0);
+    expect(out.remaining).toEqual(["d1", "d2"]);
   });
 });

@@ -20,7 +20,7 @@ const PREFIX = "DELETE THIS LINE TO APPROVE";
 const LABEL = "Studio send";
 // Drafts Jayme approved that must not go out as they stand (left in Drafts, just never queued).
 // r-6195247996152572181: Jazz Gallery — says Summer played there; she hasn't (Oct 19).
-const HOLD = new Set(["r-6195247996152572181", "r8279366371648296524"]); // r8279…: approved but still says "trumpeter"; replaced by r-1169513697764250219 (Oct 20)
+const HOLD = new Set(["r-6195247996152572181"]);
 // 11am, 2pm, 5pm Eastern (EDT = UTC-4), Mon Oct 19 – Wed Oct 21, plus Thu 9am.
 const SLOTS = ["19", "20", "21"].flatMap((d) => [15, 18, 21].map((h) => `2026-10-${d}T${h}:00:00Z`)).concat(["2026-10-22T13:00:00Z"]);
 

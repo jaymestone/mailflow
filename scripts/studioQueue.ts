@@ -18,6 +18,9 @@ import { getAccessToken } from "../src/lib/gmail/client";
 const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
 const PREFIX = "DELETE THIS LINE TO APPROVE";
 const LABEL = "Studio send";
+// Drafts Jayme approved that must not go out as they stand (left in Drafts, just never queued).
+// r-6195247996152572181: Jazz Gallery — says Summer played there; she hasn't (Oct 19).
+const HOLD = new Set(["r-6195247996152572181", "r8279366371648296524"]); // r8279…: approved but still says "trumpeter"; replaced by r-1169513697764250219 (Oct 20)
 // 11am, 2pm, 5pm Eastern (EDT = UTC-4), Mon Oct 19 – Wed Oct 21, plus Thu 9am.
 const SLOTS = ["19", "20", "21"].flatMap((d) => [15, 18, 21].map((h) => `2026-10-${d}T${h}:00:00Z`)).concat(["2026-10-22T13:00:00Z"]);
 
@@ -43,6 +46,7 @@ const SLOTS = ["19", "20", "21"].flatMap((d) => [15, 18, 21].map((h) => `2026-10
   }
   for (const f of process.argv.slice(2)) if (existsSync(f)) for (const o of JSON.parse(readFileSync(f, "utf8"))) if (o.draftId) ids.add(o.draftId);
   if (pruneTo) for (const id of [...ids]) if (!pruneTo.has(id)) ids.delete(id);
+  for (const id of HOLD) ids.delete(id);
   const now = Date.now();
   actions = actions.filter((a) => !(a.label.startsWith(LABEL) && a.status === "pending"));
   for (const runAt of SLOTS.filter((s) => Date.parse(s) > now))

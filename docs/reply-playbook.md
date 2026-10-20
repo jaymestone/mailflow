@@ -37,6 +37,12 @@
 
 ---
 
+**From his edit to Erika Elliott (Oct 19 2026):**
+- **Link words, not bare URLs.** Write "The rest of the roster is here", with "here" as the link, not "here: https://…".
+- **Cut justifications.** He deleted "and SNL doesn't tape in the summer". State the ask; don't argue for it.
+- **End the closer with "!",** even when the opener already has one: "Happy to hop on a call anytime!"
+- **For venues that already know the artist, skip the tagline.** "I'm now representing SUMMER CAMARGO. She's played Birdland a number of times…" He found "Saturday Night Live's youngest horn" too salesy for rooms that know her.
+
 ## 2. Length & format
 
 **Default to 1–4 sentences, about 25–70 words.** The usual shape is opener, one answer or fact, one question.

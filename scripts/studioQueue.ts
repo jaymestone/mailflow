@@ -21,8 +21,17 @@ const LABEL = "Studio send";
 // Drafts Jayme approved that must not go out as they stand (left in Drafts, just never queued).
 // r-6195247996152572181: Jazz Gallery — says Summer played there; she hasn't (Oct 19).
 const HOLD = new Set(["r-6195247996152572181"]);
-// 11am, 2pm, 5pm Eastern (EDT = UTC-4), Mon Oct 19 – Wed Oct 21, plus Thu 9am.
-const SLOTS = ["19", "20", "21"].flatMap((d) => [15, 18, 21].map((h) => `2026-10-${d}T${h}:00:00Z`)).concat(["2026-10-22T13:00:00Z"]);
+// 11am, 2pm, 5pm Eastern on weekdays, from Oct 19 through Nov 6, 2026
+// (extended past the studio days; EDT until Nov 1, then EST).
+const SLOTS = (() => {
+  const out: string[] = [];
+  for (let d = new Date("2026-10-19T00:00:00Z"); d <= new Date("2026-11-06T00:00:00Z"); d = new Date(d.getTime() + 864e5)) {
+    const dow = d.getUTCDay(); if (dow === 0 || dow === 6) continue;
+    const off = d >= new Date("2026-11-01T00:00:00Z") ? 5 : 4;
+    for (const h of [11, 14, 17]) out.push(`${d.toISOString().slice(0, 10)}T${String(h + off).padStart(2, "0")}:00:00Z`);
+  }
+  return out;
+})();
 
 (async () => {
   const { data } = await supabase.from("app_settings").select("value").eq("key", SCHEDULED_ACTIONS_KEY).maybeSingle();

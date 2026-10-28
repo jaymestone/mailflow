@@ -20,7 +20,7 @@ const PREFIX = "DELETE THIS LINE TO APPROVE";
 const LABEL = "Studio send";
 // Drafts Jayme approved that must not go out as they stand (left in Drafts, just never queued).
 // r-6195247996152572181: Jazz Gallery — says Summer played there; she hasn't (Oct 19).
-const HOLD = new Set(["r-6195247996152572181"]);
+const HOLD = new Set(["r-6195247996152572181", "r1851312371149441737"]); // + SOB's Feb 14 pitch: De La Luz said yes to Feb 14 (Oct 28)
 // 11am, 2pm, 5pm Eastern on weekdays, from Oct 19 through Nov 6, 2026
 // (extended past the studio days; EDT until Nov 1, then EST).
 const SLOTS = (() => {

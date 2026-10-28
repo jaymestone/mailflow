@@ -50,6 +50,10 @@ async function draftText(token: string, id: string): Promise<string | null> {
   if (!r?.ok) throw new Error(`read ${r?.status}`);
   const d = await r.json();
   if (!d.message?.payload) throw new Error("read: no payload");
+  // Jayme sometimes sends a draft himself; Gmail can leave the draft entry
+  // pointing at the now-SENT message, and drafts.send then 400s "Message not
+  // a draft" forever (Oct 2026). Treat it as already sent.
+  if ((d.message.labelIds || []).includes("SENT")) return null;
   const parts: string[] = [];
   const walk = (p: any) => { if (p?.body?.data) parts.push(Buffer.from(p.body.data, "base64url").toString("utf8")); for (const c of p?.parts || []) walk(c); };
   walk(d.message?.payload);
@@ -82,7 +86,8 @@ export async function sendDrafts(supabase: SupabaseClient, account: string, draf
     });
     if (res.ok) out.sent++;
     else if (res.status === 404) out.gone++; // already sent (or deleted) by Jayme
-    else out.failed.push(`${id}: ${res.status}`);
+    else if (res.status === 400 && /Message not a draft/i.test(await res.clone().text())) out.gone++; // he sent it himself
+    else out.failed.push(`${id}: ${res.status} ${(await res.text()).replace(/\s+/g, " ").slice(0, 160)}`);
   }
   return out;
 }

@@ -124,6 +124,8 @@
 - "No worries at all. Thanks so much for digging those out! Happy to send more on any of the artists, or to chat anytime as you shape your 2027-28 season."
 - "Here's the full roster: https://www.jaymestone.com/agency. If anything jumps out, or if there's still a spot open, I'd love to hear. Happy to chat anytime."
 
+**Don't ask "What kind of offer could we expect?" until the venue has shown interest and you've talked dates** (Jayme, Oct 28 2026). Cold pitches, routing pitches and first replies end with the date ask and "Happy to chat anytime!".
+
 **When a venue says yes to an artist and dates aren't set, ask what they can offer.** Don't hold dates yet: "Wonderful, thanks so much! What kind of offer could we expect for a show like this?"
 
 **When they mention another format (second stage, support slot), affirm it plainly:** "A support slot or your second stage could both work well for them. I'll keep you posted as the August tour comes together."

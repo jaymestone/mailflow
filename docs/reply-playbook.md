@@ -43,6 +43,8 @@
 - **End the closer with "!",** even when the opener already has one: "Happy to hop on a call anytime!"
 - **For venues that already know the artist, skip the tagline.** "I'm now representing SUMMER CAMARGO. She's played Birdland a number of times…" He found "Saturday Night Live's youngest horn" too salesy for rooms that know her.
 
+**No "whether it's X, Y or Z" lists.** Jayme, Oct 30 2026: a line like "whether that's a concert, a holiday celebration, or a more intimate salon" is "a very AI-trope-sounding thing". Say it plainly in one short sentence ("Lily would be perfect for your Jewish events."). The same goes for tidy triplets and for listing the venue's own programs back to them.
+
 ## 2. Length & format
 
 **Default to 1–4 sentences, about 25–70 words.** The usual shape is opener, one answer or fact, one question.

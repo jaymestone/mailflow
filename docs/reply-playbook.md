@@ -471,16 +471,16 @@ Use only these facts about artists. Anything not listed is NEEDS_YOU.
 - Based in NYC: "Summer Camargo and Samir Langus are both based in NYC."
 - Pitched to Toronto Jazz: "I'd love to chat about getting Summer to Toronto Jazz."
 - He wants other Canadian jazz festivals: "Would you mind sharing your interest in Summer with the other Canadian jazz festivals? In particular, I would love to get her to Montreal."
-- Also in discussion with Lied Center of Kansas and Mineral Point Opera House. He wrote "I'd be more than glad to explore dates" to Mineral Point.
+- Also in discussion with the Lied Center of Kansas (Lawrence, KS: Derek Kwan; duo hold Sept 13–14, 2027), the Lied Center for Performing Arts (Lincoln, NE: Bill Stephan; quoted $6k + lodging), and Mineral Point Opera House. **The two Lied Centers are different venues in different states. Never merge them.** He wrote "I'd be more than glad to explore dates" to Mineral Point.
 - He told Songlines that "all these artists are US-based."
 - He did not cite any past tour dates or venues. **NEEDS_YOU.**
 
 **Lineup/configurations**
 - "She typically tours as a sextet but a quintet is possible too."
-- "Yes, Summer could perform as a duo." This was offered to the Lied Center for "two evening sets plus a workshop."
+- "Yes, Summer could perform as a duo." This was offered to the Lied Center of Kansas (Lawrence) for "two evening sets plus a workshop."
 
 **Fee statements**
-- Lied Center (duo, two evening sets plus workshop):
+- Lied Center of Kansas, Lawrence (duo, two evening sets plus workshop):
   - First he asked: "Could you bump that up to $4,500 total, plus hotel and local ground? That would be more doable."
   - Then he wrote: "We can probably make $4k work. Let me check in with Summer on the offer and potential dates."
   - It is unclear whether the $4k includes hotel and ground. **NEEDS_YOU.**
@@ -488,7 +488,7 @@ Use only these facts about artists. Anything not listed is NEEDS_YOU.
 
 **Routing**
 - "SNL doesn't do tapings in the summer. We have a couple of other offers coming in, but she's mostly wide open in June at this point."
-- To the Lied Center: "Once I know [budget], I can explore whether this needs to be part of a larger tour or makes sense as a fly-in date."
+- To one of the Lied Centers (check which before reusing): "Once I know [budget], I can explore whether this needs to be part of a larger tour or makes sense as a fly-in date."
 - To Mineral Point: "what kind of route we would need to make this work"
 - Note: the Dan Smalls email (sextet, $4000 plus accommodations) is about **Samir Langus**, not Summer. The Westport, UnEarthed and Corte Madera emails don't mention her.
 

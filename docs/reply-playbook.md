@@ -263,6 +263,8 @@ Frame it as something he needs to plan, not as a service he's offering. He made 
 
 **Know the bulk template exception.** His mass "circling back" outreach uses an em dash, exclamation marks, "Kindly," and a full signature. That's a template, not the voice for individual replies.
 
+**"When's a good time to follow up?"** (Jayme, Nov 2 2026). On a routine check-in, don't tack it on: you *are* following up, so it's redundant. It fits after repeated unanswered nudges, or when timing is the open question, phrased conditionally. Example he sent to Georgia Tech on the second nudge: "If it's still early in your planning, when's a good time to follow up with you?" It's also fine in replies where the venue hasn't set timing.
+
 **Cadence:** there's no evidence on intervals or how many nudges before stopping. Don't assume. If the thread shows multiple unanswered nudges, flag NEEDS_YOU.
 
 ---

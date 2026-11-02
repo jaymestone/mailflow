@@ -259,7 +259,7 @@ export async function runConversationSummarizeTick(
 }
 
 /** Gathers both sides of a conversation across every Gmail thread it spans. */
-async function loadThreadMessages(supabase: SupabaseClient, threadIds: string[]): Promise<ThreadMessage[]> {
+export async function loadThreadMessages(supabase: SupabaseClient, threadIds: string[]): Promise<ThreadMessage[]> {
   if (threadIds.length === 0) return [];
 
   const [inbound, manual] = await Promise.all([

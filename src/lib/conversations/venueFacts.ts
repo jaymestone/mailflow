@@ -8,7 +8,7 @@
 // wrote above it untouched.
 
 export const FACTS_HEADER = "Venue facts:";
-const MAX_FACTS = 15;
+const MAX_FACTS = 8;
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9$%]+/g, " ").trim();
 
@@ -30,4 +30,12 @@ export function mergeVenueFacts(notes: string | null | undefined, facts: string[
   const all = [...existing, ...added].slice(-MAX_FACTS);
   const block = `${FACTS_HEADER}\n${all.map((f) => `- ${f}`).join("\n")}`;
   return before ? `${before}\n\n${block}` : block;
+}
+
+/** Replace the whole facts block (used by the one-off backfill). */
+export function replaceVenueFacts(notes: string | null | undefined, facts: string[]): string | null {
+  const text = notes ?? "";
+  const at = text.indexOf(FACTS_HEADER);
+  const before = (at >= 0 ? text.slice(0, at) : text).trimEnd();
+  return mergeVenueFacts(before || null, facts);
 }

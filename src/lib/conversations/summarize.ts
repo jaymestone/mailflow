@@ -150,7 +150,7 @@ const SCHEMA = {
       type: "array",
       items: { type: "string" },
       description:
-        "Hard, durable facts about the VENUE or PRESENTER itself that would still be true next year, as the venue stated them. Examples: 'Capacity 120 (standing 200)', 'Rental venue only; does not book talent', 'Summer series only (late May–Aug)', 'Festival is mid-July (2027: July 23–25)', 'Classical programming only', 'Books local acts only', 'Budget $1,500–$4,000 incl. travel', 'Pays 70% of door, no guarantee', 'Provides hosted housing', 'Season planned Nov–Jan', 'Tickets around $30'. NOT the state of this conversation, not what Jayme pitched, not next steps, not opinions. Each under 90 characters. Empty array if the thread states none.",
+        "Hard, general facts about the VENUE or PRESENTER itself that would still be true for any artist next year. Terse fragments, not sentences, under 40 characters each, at most 6, most important first. Good: '120 cap', 'Rentals only', 'Summer series only (late May–Aug)', 'Festival mid-July', 'Classical only', 'Local acts only', 'Budget $1.5–4k incl. travel', '60/40 split', 'No accommodations', 'Hosted housing', 'Books Nov–Jan'. Only these kinds: capacity, venue type or limits (rentals only, classical only, local acts only), season or festival timing, typical budget or deal type, housing. Skip anything specific to one offer, date or artist, staff names, location, operational minutiae (door staff, set lengths) and the conversation's state. Empty array if none.",
     },
     sheet_note: {
       type: "string",

@@ -7,6 +7,7 @@ const EDITABLE_FIELDS = [
   "email",
   "venue",
   "venue_type",
+  "capacity",
   "city",
   "state",
   "country",
@@ -33,6 +34,11 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   const update: Record<string, unknown> = {};
   for (const field of EDITABLE_FIELDS) {
     if (field in body) update[field] = typeof body[field] === "string" ? body[field].trim() || null : body[field];
+  }
+  // Capacity is a number column; accept "350", "~350" or "350 seats".
+  if ("capacity" in update && update.capacity !== null) {
+    const n = parseInt(String(update.capacity).replace(/[^0-9]/g, ""), 10);
+    update.capacity = Number.isFinite(n) ? n : null;
   }
   if (Object.keys(update).length === 0) {
     return NextResponse.json({ error: "no editable fields provided" }, { status: 400 });

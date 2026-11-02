@@ -7,6 +7,8 @@ export type ContactFilters = {
   city: string;
   country: string;
   venue_type: string;
+  capacity_min: string;
+  capacity_max: string;
   q: string;
   near: string;
   radius_min: string;
@@ -25,6 +27,8 @@ export const EMPTY_CONTACT_FILTERS: ContactFilters = {
   city: "",
   country: "",
   venue_type: "",
+  capacity_min: "",
+  capacity_max: "",
   q: "",
   near: "",
   radius_min: "0",
@@ -137,6 +141,25 @@ export function ContactFilterFields({
             placeholder="Festival"
             className={inputClass}
           />
+        </Field>
+        <Field label="Capacity">
+          <span className="inline-flex items-baseline gap-1">
+            <input
+              value={filters.capacity_min}
+              onChange={(e) => setField("capacity_min", e.target.value.replace(/[^0-9]/g, ""))}
+              placeholder="min"
+              inputMode="numeric"
+              className={milesClass}
+            />
+            <span className="text-[13px] text-faint-3">–</span>
+            <input
+              value={filters.capacity_max}
+              onChange={(e) => setField("capacity_max", e.target.value.replace(/[^0-9]/g, ""))}
+              placeholder="max"
+              inputMode="numeric"
+              className={milesClass}
+            />
+          </span>
         </Field>
         <Field label="Search">
           <input

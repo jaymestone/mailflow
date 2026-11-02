@@ -12,6 +12,8 @@ export type ContactSearchFilters = {
   state?: string;
   city?: string;
   venue_type?: string;
+  capacity_min?: string;
+  capacity_max?: string;
   q?: string;
   near?: string;
   radius_min?: string;
@@ -41,6 +43,7 @@ export type ContactRow = {
   email: string;
   venue: string | null;
   venue_type: string | null;
+  capacity?: number | null;
   city: string | null;
   state: string | null;
   country: string | null;
@@ -142,6 +145,14 @@ export async function searchContacts(
         if (engagementIds !== null) {
           candidateRows = candidateRows.filter((r) => engagementIds.has(r.id));
         }
+        // The radius RPC doesn't return capacity, so filter by it here.
+        if ((filters.capacity_min?.trim() || filters.capacity_max?.trim()) && candidateRows.length) {
+          const { data: caps } = await supabase.from("contacts").select("id, capacity").in("id", candidateRows.map((r) => r.id));
+          const capOf = new Map((caps ?? []).map((c) => [c.id as string, c.capacity as number | null]));
+          const lo = filters.capacity_min?.trim() ? parseInt(filters.capacity_min, 10) : -Infinity;
+          const hi = filters.capacity_max?.trim() ? parseInt(filters.capacity_max, 10) : Infinity;
+          candidateRows = candidateRows.filter((r) => { const c = capOf.get(r.id); return c != null && c >= lo && c <= hi; }).map((r) => ({ ...r, capacity: capOf.get(r.id) ?? null }));
+        }
         rows = candidateRows;
         count = rows.length;
         radiusNote = `Venues ${minMiles > 0 ? `${minMiles}–` : "within "}${maxMiles} miles of "${filters.near}"`;
@@ -157,7 +168,7 @@ export async function searchContacts(
       let query = supabase
         .from("contacts")
         .select(
-          "id, first_name, last_name, email, venue, venue_type, city, state, country, list_id, geocode_status",
+          "id, first_name, last_name, email, venue, venue_type, capacity, city, state, country, list_id, geocode_status",
           { count: "exact" },
         )
         // A secondary sort key is required, not cosmetic: many contacts
@@ -177,6 +188,8 @@ export async function searchContacts(
       if (filters.state) query = query.ilike("state", filters.state);
       if (filters.city) query = query.ilike("city", filters.city);
       if (filters.venue_type) query = query.ilike("venue_type", `%${filters.venue_type}%`);
+      if (filters.capacity_min?.trim()) query = query.gte("capacity", parseInt(filters.capacity_min, 10));
+      if (filters.capacity_max?.trim()) query = query.lte("capacity", parseInt(filters.capacity_max, 10));
       if (filters.q) {
         query = query.or(
           `venue.ilike.%${filters.q}%,city.ilike.%${filters.q}%,first_name.ilike.%${filters.q}%,last_name.ilike.%${filters.q}%,email.ilike.%${filters.q}%`,

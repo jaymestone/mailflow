@@ -58,6 +58,8 @@ export type ThreadSummary = {
   sheet_note: string;
   /** Durable facts about the venue itself, merged into the contact's notes (venueFacts.ts). */
   venue_facts: string[];
+  /** Main-room capacity the venue stated (largest typical audience), else null. */
+  capacity: number | null;
 };
 
 const SCHEMA = {
@@ -65,7 +67,7 @@ const SCHEMA = {
   additionalProperties: false,
   required: [
     "gist", "next_action", "fee_amount", "fee_note", "artist", "venue", "is_agreed", "is_small",
-    "sheet_artists", "sheet_dates", "sheet_window", "sheet_interest", "sheet_routing_area", "sheet_note", "venue_facts",
+    "sheet_artists", "sheet_dates", "sheet_window", "sheet_interest", "sheet_routing_area", "sheet_note", "venue_facts", "capacity",
   ],
   properties: {
     gist: {
@@ -145,6 +147,10 @@ const SCHEMA = {
     sheet_routing_area: {
       type: ["string", "null"],
       description: "For if_routing: the place routing has to pass, as they put it ('Chicago', 'BC / Golden'). Else null.",
+    },
+    capacity: {
+      type: ["integer", "null"],
+      description: "The venue's main-room capacity as the venue stated it (seats, or standing if that's all they gave). Null if not stated. Never estimate.",
     },
     venue_facts: {
       type: "array",

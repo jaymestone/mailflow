@@ -12,6 +12,7 @@ type Contact = {
   email: string;
   venue: string | null;
   venue_type: string | null;
+  capacity: number | string | null;
   city: string | null;
   state: string | null;
   country: string | null;
@@ -31,6 +32,7 @@ const FIELDS: { key: keyof Contact; label: string }[] = [
   { key: "email", label: "Email" },
   { key: "venue", label: "Venue" },
   { key: "venue_type", label: "Venue type" },
+  { key: "capacity", label: "Capacity" },
   { key: "city", label: "City" },
   { key: "state", label: "State" },
   { key: "country", label: "Country" },

@@ -1,3 +1,4 @@
+import { mergeVenueFacts } from "./venueFacts";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { summarizeThread, type ThreadMessage } from "./summarize";
 import { computeIsLive, computeStatus } from "./status";
@@ -46,6 +47,7 @@ export type SummarizeTickResult = {
 };
 
 type ConversationRow = {
+  contact_id?: string | null;
   id: string;
   thread_key: string;
   gmail_thread_ids: string[];
@@ -133,7 +135,7 @@ export async function runConversationSummarizeTick(
   // avoids a schema change purely to let the database ask the question.
   const { data: candidates, error } = await supabase
     .from("conversations")
-    .select("id, thread_key, gmail_thread_ids, summary_source_hash, summarized_source_hash, summarized_at, status_override, last_message_at, last_direction, summarize_attempts, summarize_blocked_until, revision")
+    .select("id, thread_key, contact_id, gmail_thread_ids, summary_source_hash, summarized_source_hash, summarized_at, status_override, last_message_at, last_direction, summarize_attempts, summarize_blocked_until, revision")
     .eq("is_live", true)
     .order("last_message_at", { ascending: false, nullsFirst: false })
     .limit(1000);
@@ -221,6 +223,13 @@ export async function runConversationSummarizeTick(
         })
         .eq("id", row.id);
       if (writeError) throw new Error(writeError.message);
+
+      // Hard venue facts go on the contact's notes, below anything already there.
+      if (row.contact_id && summary.venue_facts?.length) {
+        const { data: contact } = await supabase.from("contacts").select("notes").eq("id", row.contact_id).maybeSingle();
+        const merged = mergeVenueFacts(contact?.notes, summary.venue_facts);
+        if (contact && merged !== contact.notes) await supabase.from("contacts").update({ notes: merged }).eq("id", row.contact_id);
+      }
 
       result.summarized++;
     } catch (err) {

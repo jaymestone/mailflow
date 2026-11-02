@@ -56,6 +56,8 @@ export type ThreadSummary = {
   sheet_interest: string;
   sheet_routing_area: string | null;
   sheet_note: string;
+  /** Durable facts about the venue itself, merged into the contact's notes (venueFacts.ts). */
+  venue_facts: string[];
 };
 
 const SCHEMA = {
@@ -63,7 +65,7 @@ const SCHEMA = {
   additionalProperties: false,
   required: [
     "gist", "next_action", "fee_amount", "fee_note", "artist", "venue", "is_agreed", "is_small",
-    "sheet_artists", "sheet_dates", "sheet_window", "sheet_interest", "sheet_routing_area", "sheet_note",
+    "sheet_artists", "sheet_dates", "sheet_window", "sheet_interest", "sheet_routing_area", "sheet_note", "venue_facts",
   ],
   properties: {
     gist: {
@@ -143,6 +145,12 @@ const SCHEMA = {
     sheet_routing_area: {
       type: ["string", "null"],
       description: "For if_routing: the place routing has to pass, as they put it ('Chicago', 'BC / Golden'). Else null.",
+    },
+    venue_facts: {
+      type: "array",
+      items: { type: "string" },
+      description:
+        "Hard, durable facts about the VENUE or PRESENTER itself that would still be true next year, as the venue stated them. Examples: 'Capacity 120 (standing 200)', 'Rental venue only; does not book talent', 'Summer series only (late May–Aug)', 'Festival is mid-July (2027: July 23–25)', 'Classical programming only', 'Books local acts only', 'Budget $1,500–$4,000 incl. travel', 'Pays 70% of door, no guarantee', 'Provides hosted housing', 'Season planned Nov–Jan', 'Tickets around $30'. NOT the state of this conversation, not what Jayme pitched, not next steps, not opinions. Each under 90 characters. Empty array if the thread states none.",
     },
     sheet_note: {
       type: "string",

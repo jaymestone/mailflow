@@ -57,7 +57,7 @@ export async function backfillClickClassification(
     created_at: string;
   }>(supabase, "link_tokens", "token, contact_id, campaign_id, label, created_at", (q) =>
     opts.campaignId ? q.eq("campaign_id", opts.campaignId) : q,
-  );
+  "token");
   const tokenById = new Map(tokens.map((t) => [t.token, t]));
   if (tokenById.size === 0) return result;
 
@@ -68,7 +68,8 @@ export async function backfillClickClassification(
     user_agent: string | null;
     is_likely_bot: boolean;
     click_class: string | null;
-  }>(supabase, "link_clicks", "id, token, clicked_at, user_agent, is_likely_bot, click_class", (q) => q);
+    class_reason: string | null;
+  }>(supabase, "link_clicks", "id, token, clicked_at, user_agent, is_likely_bot, click_class, class_reason", (q) => q, "id");
 
   const grouped = new Map<string, RawClick[]>();
   for (const click of clicks) {
@@ -87,7 +88,6 @@ export async function backfillClickClassification(
   }
   result.contactsExamined = grouped.size;
 
-  const priorClass = new Map(clicks.map((c) => [c.id, c.click_class]));
   const originalRow = new Map(clicks.map((c) => [c.id, c]));
   const classifiedAt = new Date().toISOString();
   const updates: { id: string; click_class: string; class_reason: string }[] = [];
@@ -96,7 +96,14 @@ export async function backfillClickClassification(
     for (const verdict of classifyClicks(group)) {
       result.clicksExamined++;
       result[verdict.clickClass]++;
-      if (priorClass.get(verdict.id) !== verdict.clickClass) result.changed++;
+      const prior = originalRow.get(verdict.id)!;
+      if (prior.click_class !== verdict.clickClass) result.changed++;
+      // Only write clicks whose verdict or reason moved. Rewriting all
+      // ~40k rows every night took the run past cron-job.org's 30s
+      // ceiling (failing nightly from Oct 2026); in practice a run
+      // changes a handful. classified_at therefore marks when a click's
+      // verdict last changed, not when it was last checked.
+      if (prior.click_class === verdict.clickClass && prior.class_reason === verdict.reason) continue;
       updates.push({ id: verdict.id, click_class: verdict.clickClass, class_reason: verdict.reason });
     }
   }
@@ -146,15 +153,31 @@ async function pageAll<T>(
   table: string,
   select: string,
   filter: QueryFilter,
+  orderBy: string,
 ): Promise<T[]> {
-  const out: T[] = [];
+  // Pages are fetched several at a time: one after another, ~50 pages of
+  // clicks alone took ~15s, half the cron budget. A stable order is what
+  // makes offset paging safe -- without it Postgres may return rows in a
+  // different order per request and pages can overlap or skip rows.
   const size = 1000;
-  for (let from = 0; ; from += size) {
-    const query = filter(supabase.from(table).select(select).range(from, from + size - 1));
-    const { data, error } = await query;
-    if (error) throw new Error(`${table}: ${error.message}`);
-    const rows = (data ?? []) as T[];
-    out.push(...rows);
-    if (rows.length < size) return out;
+  const PARALLEL = 8;
+  const { count, error: countError } = await filter(
+    supabase.from(table).select(select, { count: "exact", head: true }),
+  );
+  if (countError) throw new Error(`${table}: ${countError.message}`);
+  const pages = Math.ceil((count ?? 0) / size) + 1; // +1 absorbs rows added mid-run
+  const out: T[] = [];
+  for (let start = 0; start < pages; start += PARALLEL) {
+    const batch = await Promise.all(
+      Array.from({ length: Math.min(PARALLEL, pages - start) }, (_, k) => {
+        const from = (start + k) * size;
+        return filter(supabase.from(table).select(select).order(orderBy).range(from, from + size - 1));
+      }),
+    );
+    for (const { data, error } of batch) {
+      if (error) throw new Error(`${table}: ${error.message}`);
+      out.push(...((data ?? []) as T[]));
+    }
   }
+  return out;
 }

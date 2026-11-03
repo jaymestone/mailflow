@@ -147,11 +147,12 @@ export async function searchContacts(
         }
         // The radius RPC doesn't return capacity, so filter by it here.
         if ((filters.capacity_min?.trim() || filters.capacity_max?.trim()) && candidateRows.length) {
-          const { data: caps } = await supabase.from("contacts").select("id, capacity").in("id", candidateRows.map((r) => r.id));
+          const { data: caps } = await supabase.from("contacts").select("id, capacity, capacity_min").in("id", candidateRows.map((r) => r.id));
           const capOf = new Map((caps ?? []).map((c) => [c.id as string, c.capacity as number | null]));
+          const minOf = new Map((caps ?? []).map((c) => [c.id as string, (c.capacity_min ?? c.capacity) as number | null]));
           const lo = filters.capacity_min?.trim() ? parseInt(filters.capacity_min, 10) : -Infinity;
           const hi = filters.capacity_max?.trim() ? parseInt(filters.capacity_max, 10) : Infinity;
-          candidateRows = candidateRows.filter((r) => { const c = capOf.get(r.id); return c != null && c >= lo && c <= hi; }).map((r) => ({ ...r, capacity: capOf.get(r.id) ?? null }));
+          candidateRows = candidateRows.filter((r) => { const c = capOf.get(r.id), m = minOf.get(r.id); return c != null && m != null && c >= lo && m <= hi; }).map((r) => ({ ...r, capacity: capOf.get(r.id) ?? null }));
         }
         rows = candidateRows;
         count = rows.length;
@@ -188,8 +189,13 @@ export async function searchContacts(
       if (filters.state) query = query.ilike("state", filters.state);
       if (filters.city) query = query.ilike("city", filters.city);
       if (filters.venue_type) query = query.ilike("venue_type", `%${filters.venue_type}%`);
+      // A venue matches if any of its rooms falls in range: its largest room is at
+      // least the minimum, and its smallest room (or only room) is at most the maximum.
       if (filters.capacity_min?.trim()) query = query.gte("capacity", parseInt(filters.capacity_min, 10));
-      if (filters.capacity_max?.trim()) query = query.lte("capacity", parseInt(filters.capacity_max, 10));
+      if (filters.capacity_max?.trim()) {
+        const hi = parseInt(filters.capacity_max, 10);
+        query = query.or(`capacity_min.lte.${hi},and(capacity_min.is.null,capacity.lte.${hi})`);
+      }
       if (filters.q) {
         query = query.or(
           `venue.ilike.%${filters.q}%,city.ilike.%${filters.q}%,first_name.ilike.%${filters.q}%,last_name.ilike.%${filters.q}%,email.ilike.%${filters.q}%`,

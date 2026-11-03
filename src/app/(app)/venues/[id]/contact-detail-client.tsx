@@ -13,6 +13,7 @@ type Contact = {
   venue: string | null;
   venue_type: string | null;
   capacity: number | string | null;
+  capacity_min: number | string | null;
   city: string | null;
   state: string | null;
   country: string | null;
@@ -32,7 +33,8 @@ const FIELDS: { key: keyof Contact; label: string }[] = [
   { key: "email", label: "Email" },
   { key: "venue", label: "Venue" },
   { key: "venue_type", label: "Venue type" },
-  { key: "capacity", label: "Capacity" },
+  { key: "capacity", label: "Capacity (largest room)" },
+  { key: "capacity_min", label: "Smallest room" },
   { key: "city", label: "City" },
   { key: "state", label: "State" },
   { key: "country", label: "Country" },

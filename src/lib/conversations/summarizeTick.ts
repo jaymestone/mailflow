@@ -225,13 +225,14 @@ export async function runConversationSummarizeTick(
       if (writeError) throw new Error(writeError.message);
 
       // Hard venue facts go on the contact's notes, below anything already there.
-      if (row.contact_id && (summary.venue_facts?.length || summary.capacity)) {
-        const { data: contact } = await supabase.from("contacts").select("notes, capacity").eq("id", row.contact_id).maybeSingle();
+      if (row.contact_id && (summary.venue_facts?.length || summary.capacity || summary.capacity_min)) {
+        const { data: contact } = await supabase.from("contacts").select("notes, capacity, capacity_min").eq("id", row.contact_id).maybeSingle();
         const merged = mergeVenueFacts(contact?.notes, summary.venue_facts ?? []);
         const patch: Record<string, unknown> = {};
         if (contact && merged !== contact.notes) patch.notes = merged;
         // Capacity is its own filterable column; a stated figure fills it if empty.
         if (contact && summary.capacity && !contact.capacity) patch.capacity = summary.capacity;
+        if (contact && summary.capacity_min && !contact.capacity_min && summary.capacity_min !== (contact.capacity ?? summary.capacity)) patch.capacity_min = summary.capacity_min;
         if (Object.keys(patch).length) await supabase.from("contacts").update(patch).eq("id", row.contact_id);
       }
 

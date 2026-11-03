@@ -60,6 +60,8 @@ export type ThreadSummary = {
   venue_facts: string[];
   /** Main-room capacity the venue stated (largest typical audience), else null. */
   capacity: number | null;
+  /** Smallest separate performance space, when the venue has more than one; else null. */
+  capacity_min: number | null;
 };
 
 const SCHEMA = {
@@ -67,7 +69,7 @@ const SCHEMA = {
   additionalProperties: false,
   required: [
     "gist", "next_action", "fee_amount", "fee_note", "artist", "venue", "is_agreed", "is_small",
-    "sheet_artists", "sheet_dates", "sheet_window", "sheet_interest", "sheet_routing_area", "sheet_note", "venue_facts", "capacity",
+    "sheet_artists", "sheet_dates", "sheet_window", "sheet_interest", "sheet_routing_area", "sheet_note", "venue_facts", "capacity", "capacity_min",
   ],
   properties: {
     gist: {
@@ -150,7 +152,11 @@ const SCHEMA = {
     },
     capacity: {
       type: ["integer", "null"],
-      description: "The venue's main-room capacity as the venue stated it (seats, or standing if that's all they gave). Null if not stated. Never estimate.",
+      description: "Capacity of the venue's LARGEST performance space as the venue stated it (seats, or standing if that's all they gave). Null if not stated. Never estimate.",
+    },
+    capacity_min: {
+      type: ["integer", "null"],
+      description: "If the venue mentioned more than one performance space (e.g. a 1,200-seat hall and a 200-cap black box), the capacity of the SMALLEST one. Null if only one space or none stated.",
     },
     venue_facts: {
       type: "array",

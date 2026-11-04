@@ -11,6 +11,14 @@ import { type NextRequest, NextResponse } from "next/server";
 const PUBLIC_PATHS = ["/login", "/auth/callback", "/api/cron", "/about", "/api/r"];
 
 export async function proxy(request: NextRequest) {
+  // Public paths need no session, so skip the Supabase auth round trip.
+  // Matters for /api/cron: besides the real ticks, an outside caller with
+  // a long-rotated secret hits geocode every minute (seen 2026-11-04,
+  // all rejected with 401), and each hit was paying for a getUser call.
+  if (PUBLIC_PATHS.some((path) => request.nextUrl.pathname.startsWith(path))) {
+    return NextResponse.next({ request });
+  }
+
   let supabaseResponse = NextResponse.next({ request });
 
   const supabase = createServerClient(

@@ -6,7 +6,11 @@
 // risks false "stale" alerts, which would undermine trust in this list
 // faster than leaving a known gap.
 export const EXPECTED_INTERVAL_MINUTES: Record<string, number> = {
-  "geocode-tick": 1,
+  // Every 15 minutes since 2026-11-03 (was every minute; it had nothing
+  // to do and was the biggest user of Vercel CPU when the Hobby plan
+  // paused the deployment). Keep these in step with cron-job.org, or
+  // the checker emails false "stale" alerts every few hours.
+  "geocode-tick": 15,
   "send-engine-tick": 15,
   "reply-poll-tick": 5,
   // Runs every minute; 2 here means the alert fires after six minutes of
@@ -19,5 +23,5 @@ export const EXPECTED_INTERVAL_MINUTES: Record<string, number> = {
   // The booking spreadsheet (artist workbooks, Leads, Routing), every 15
   // minutes. notion-sync-tick was watched here until the Notion board was
   // retired on 2026-10-08 in favour of this.
-  "workbook-tick": 15,
+  "workbook-tick": 60, // hourly since 2026-11-03, same reason as geocode
 };

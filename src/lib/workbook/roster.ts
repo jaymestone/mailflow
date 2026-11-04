@@ -12,6 +12,7 @@ export const SHEET_ROSTER = [
   "Samir Langus",
   "Charlie & The Tropicales",
   "Summer Camargo",
+  "Bonnie Paine",
 ] as const;
 
 export type RosterArtist = (typeof SHEET_ROSTER)[number];

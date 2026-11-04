@@ -591,3 +591,14 @@ Use only these facts about artists. Anything not listed is NEEDS_YOU.
 **Routing**
 - "JORGE GLEM & SAM REIDER… are available anytime July 2-17." (Green Box)
 - "I have a couple of other interested venues in the area with whom I could easily build a route." (ArtYard/FreshGrass)
+
+## Bonnie Paine
+
+Signed Nov 2026. Page: https://www.jaymestone.com/agency/bonnie-paine. Facts are from her agency page; anything else (fees, lineup, availability) is NEEDS_YOU.
+
+- **Who she is:** for twenty years the voice of Elephant Revival, which she co-founded in Nederland, CO in 2006. She plays cello, musical saw, washboard and bass drum.
+- **Album:** *Unseen*, her debut solo album (Raven Song Records): ten originals recorded with T-Bone Burnett, Gregory Alan Isakov and Daniel Sproul, with appearances from Brittany Haas and Rising Appalachia. Molly Tuttle is on a new single.
+- **Press:** Colorado Public Radio calls her voice "luminous, almost otherworldly."
+- **Elephant Revival history:** sold-out Red Rocks shows, headlining the amphitheater three times; Telluride Bluegrass, Newport Folk Festival, NPR's Mountain Stage.
+- **Based in:** Colorado (grew up in Tahlequah, OK).
+- **First pitches (Nov 2026):** City Winery Nashville, April 15–17, 2027, with Brittany Haas, Eric Thorin and special guests; Planet Bluegrass (Telluride Bluegrass).

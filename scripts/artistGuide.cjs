@@ -2,7 +2,7 @@
 // "<Artist> / Tour Dates" file: how to read Confirmed Dates and Offers &
 // Inquiries, and how to add blackout dates and shows they booked
 // themselves. Locked so only Jayme and Anya can edit it.
-//   node scripts/artistGuide.cjs
+//   node scripts/artistGuide.cjs ["Artist Name"]   (no name = every artist)
 const { sheets } = require("./sheetGoogle.cjs");
 
 const FILES = {
@@ -15,6 +15,7 @@ const FILES = {
   "Samir Langus": "1_1FTIj6TE14KSjKK4-_j0I4m3UdGv-9JWg_cykLsRDc",
   "Charlie & The Tropicales": "1LD-coW8p4JmgRmg0M6KiZftwy56VBQug3tbc37uBouM",
   "Summer Camargo": "1BK1K2iPX_N7WN5MpSoVdOzJs-ATfMuefvztW9PTuuBM",
+  "Bonnie Paine": "1PzCEq5rRVsG2NVOttf9k_3hVD_1xzvjul7EcvoF0Qao",
 };
 const TITLE = "Start here";
 const C = (r, g, b) => ({ red: r, green: g, blue: b });
@@ -90,7 +91,9 @@ async function build(artist, id) {
 }
 
 (async () => {
+  const only = process.argv[2];
   for (const [artist, id] of Object.entries(FILES)) {
+    if (only && artist !== only) continue;
     await build(artist, id);
     console.log(artist, "done");
     await new Promise((r) => setTimeout(r, 2500));

@@ -86,6 +86,7 @@ const ARTIST_COLOR: Record<string, { red: number; green: number; blue: number }>
   "Samir Langus": { red: 0.99, green: 0.95, blue: 0.78 },
   "Charlie & The Tropicales": { red: 0.98, green: 0.84, blue: 0.8 },
   "Summer Camargo": { red: 0.88, green: 0.88, blue: 0.97 },
+  "Bonnie Paine": { red: 0.93, green: 0.9, blue: 0.84 },
 };
 
 export type WorkbookTickResult = {

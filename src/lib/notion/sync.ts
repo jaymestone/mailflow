@@ -39,7 +39,7 @@ const STATUS_FROM_LABEL = Object.fromEntries(Object.entries(STATUS_LABELS).map((
 const ARTIST_OPTIONS = new Set([
   "The Little Mercies", "Samir Langus", "Summer Camargo", "Amanda Pascali",
   "Charlie & the Tropicales", "Rakish", "Sam Reider & the Human Hands",
-  "Jorge Glem & Sam Reider", "Lily Henley", "Kavita Shah",
+  "Jorge Glem & Sam Reider", "Lily Henley", "Kavita Shah", "Bonnie Paine",
 ]);
 const REGION_OPTIONS = new Set([
   "Northeast", "Southeast", "Midwest", "Mountain West", "Southwest",

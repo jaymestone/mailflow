@@ -10,6 +10,7 @@
 //   another connected mailbox): { "account": "agency@jaymestone.com",
 //   "threadQuery": "from:someone@venue.org", "venue": "...", "body": "..." }
 // Optional "to" addresses the draft to someone other than the last sender;
+// optional "subject" replaces the "Re: <last subject>" line;
 // optional "cc" replaces the Cc list worked out from the thread.
 //
 //   npx tsx --env-file=.env.local scripts/tourThreads.ts new <drafts.json>
@@ -104,7 +105,7 @@ async function cmdRead(ids: string[]) {
 
 async function cmdDraft(file: string) {
   const stone = await stoneAccount();
-  const items: { conversationId?: string; account?: string; threadQuery?: string; venue?: string; to?: string; cc?: string[]; body: string }[] = JSON.parse(readFileSync(file, "utf8"));
+  const items: { conversationId?: string; account?: string; threadQuery?: string; venue?: string; to?: string; cc?: string[]; subject?: string; body: string }[] = JSON.parse(readFileSync(file, "utf8"));
   for (const it of items) {
     const acct = it.account ? await account(it.account) : stone;
     let conversation: any = { venue: it.venue }, threadId: string | null = null;
@@ -123,7 +124,8 @@ async function cmdDraft(file: string) {
     const to = (it.to || addrs(lastTheirs!.from)[0]).toLowerCase();
     const cc = it.cc ?? [...new Set(msgs.flatMap((x) => [...addrs(x.from), ...addrs(x.to), ...addrs(x.cc)]))]
       .filter((a) => a !== (addrs(to)[0] || to) && !OWN.test(a) && !/mailer-daemon|noreply|no-reply/.test(a));
-    const subject = /^re:/i.test(last.subject) ? last.subject : `Re: ${last.subject}`;
+    // "subject" renames the thread (it still threads via In-Reply-To/References).
+    const subject = it.subject ?? (/^re:/i.test(last.subject) ? last.subject : `Re: ${last.subject}`);
     const refs = [last.references, last.messageId].filter(Boolean).join(" ").trim();
     const boundary = `tour_${Date.now().toString(36)}`;
     const raw = [

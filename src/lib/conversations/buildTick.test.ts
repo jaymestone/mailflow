@@ -86,6 +86,25 @@ describe("runConversationBuildTick", () => {
     expect(upserted[0].last_message_at).toBe("2026-09-24T10:00:00Z");
   });
 
+  it("carries a later pass onto the conversation, but never starts one from a pass", async () => {
+    // Lake City Arts: offered July 14/16, then passed on Oct 28. The pass
+    // must reach the row (so it is re-summarised as declined); a cold "no
+    // thanks" with no conversation behind it must not become a row.
+    const { client, upserted } = fakeSupabase({
+      connected_accounts: OWN,
+      manual_sends: [],
+      conversations: [],
+      inbound_messages: [
+        { id: "1", gmail_thread_id: "t1", subject: "Re: Charlie in Colorado", from_email: "ingrid@example.com", received_at: "2026-10-20T10:00:00Z", matched_contact_id: "c1", classification_category: "interested" },
+        { id: "2", gmail_thread_id: "t1", subject: "Re: Charlie in Colorado", from_email: "ingrid@example.com", received_at: "2026-10-29T02:00:00Z", matched_contact_id: "c1", classification_category: "not_interested" },
+        { id: "3", gmail_thread_id: "t9", subject: "Re: New Roster X Elsewhere", from_email: "nope@example.org", received_at: "2026-10-29T02:00:00Z", matched_contact_id: "c9", classification_category: "not_interested" },
+      ],
+    });
+    await runConversationBuildTick(client, { now: new Date("2026-11-06T00:00:00Z") });
+    expect(upserted).toHaveLength(1);
+    expect(upserted[0].last_message_at).toBe("2026-10-29T02:00:00Z");
+  });
+
   it("marks a thread awaiting them once Jayme has actually replied", async () => {
     const { client, upserted } = fakeSupabase({
       connected_accounts: OWN,

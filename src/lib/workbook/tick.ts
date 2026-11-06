@@ -8,6 +8,7 @@ import {
   fmtRange,
   placeLead,
   promoteLead,
+  withdrawLead,
   readBookings,
   refreshNote,
   sameVenue,
@@ -95,6 +96,7 @@ export type WorkbookTickResult = {
   assigned: number;
   placed: number;
   notesRefreshed: number;
+  withdrawn: number;
   leads: number;
   routingRows: number;
   puzzles?: number;
@@ -165,7 +167,7 @@ async function readAll<T>(supabase: SupabaseClient, table: string, cols: string,
 export async function runWorkbookTick(supabase: SupabaseClient, opts: { now?: Date } = {}): Promise<WorkbookTickResult> {
   const now = opts.now ?? new Date();
   const today = now.toISOString().slice(0, 10);
-  const result: WorkbookTickResult = { assigned: 0, placed: 0, notesRefreshed: 0, leads: 0, routingRows: 0, errors: [] };
+  const result: WorkbookTickResult = { assigned: 0, placed: 0, notesRefreshed: 0, withdrawn: 0, leads: 0, routingRows: 0, errors: [] };
   if (!sheetsConfigured()) return { ...result, skipped: "GOOGLE_SHEETS_* env vars are not set" };
 
   // ---- Read the sheet ------------------------------------------------------
@@ -194,14 +196,16 @@ export async function runWorkbookTick(supabase: SupabaseClient, opts: { now?: Da
   }
 
   // ---- Mailflow's side -------------------------------------------------------
-  const convs = (
+  const all = (
     await readAll<Conv>(
       supabase,
       "conversations",
       "id, thread_key, venue, region, fee_amount, last_message_at, last_direction, contact_id, gmail_thread_ids, summarized_at, sheet_artists, sheet_dates, sheet_window, sheet_interest, sheet_routing_area, sheet_note, sheet_next_step, sheet_assigned_artist, sheet_placements, sheet_synced_at",
       (q) => q.eq("is_live", true),
     )
-  ).filter((c) => c.sheet_interest && c.sheet_interest !== "declined" && !OWN.test(c.thread_key.split("::")[0]));
+  );
+  const passed = all.filter((c) => c.sheet_interest === "declined" && (c.sheet_placements ?? []).some((p) => "row" in p));
+  const convs = all.filter((c) => c.sheet_interest && c.sheet_interest !== "declined" && !OWN.test(c.thread_key.split("::")[0]));
   const contactIds = [...new Set(convs.map((c) => c.contact_id).filter(Boolean))] as string[];
   const contactById = new Map<string, Contact>();
   for (let i = 0; i < contactIds.length; i += 200) {
@@ -263,6 +267,19 @@ export async function runWorkbookTick(supabase: SupabaseClient, opts: { now?: Da
 
   // ---- 2. Place or refresh what moved ---------------------------------------
   const writes: Write[] = [];
+  // Venues that have since passed come off the sheet (rows Jayme hasn't touched).
+  for (const c of passed) {
+    const placements = (c.sheet_placements ?? []).map((p) => {
+      const wb = books.get(p.artist);
+      if (!("row" in p) || !wb || p.tab !== wb.tab) return p;
+      const w = withdrawLead(wb, p);
+      writes.push(...w);
+      if (w.length) result.withdrawn++;
+      return { artist: p.artist, kind: "withdrawn" as const, venue: p.venue };
+    });
+    const { error } = await supabase.from("conversations").update({ sheet_placements: placements, sheet_synced_at: now.toISOString() }).eq("id", c.id);
+    if (error) result.errors.push(`${c.thread_key.slice(0, 40)}: ${error.message}`);
+  }
   for (const v of view) {
     const changed = !v.c.sheet_synced_at || (v.c.summarized_at && v.c.summarized_at > v.c.sheet_synced_at);
     if (!changed || !v.lead.artists.length) continue;

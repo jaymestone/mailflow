@@ -97,8 +97,15 @@ export async function runConversationBuildTick(
     supabase,
     "inbound_messages",
     "id, connected_account_id, gmail_thread_id, in_reply_to, references_header, subject, from_email, received_at, matched_contact_id, classification_category",
-    ["interested", "follow_up"],
+    ["interested", "follow_up", "not_interested"],
   );
+  // A "no" never starts a conversation, but it must reach one that already
+  // exists: Lake City Arts passed on Oct 28 and the board (and Charlie's
+  // workbook) still showed their July offer on Nov 6, because only
+  // interested/follow-up mail was read. Passes are attached after the
+  // positives, and only to a thread those created.
+  const passes = inbound.filter((m) => m.classification_category === "not_interested");
+  inbound.splice(0, inbound.length, ...inbound.filter((m) => m.classification_category !== "not_interested"));
   // Oldest first, so the first outside participant a thread meets -- the
   // one its key and contact are taken from -- is the person who started it.
   inbound.sort((a, b) => a.received_at.localeCompare(b.received_at));
@@ -200,6 +207,25 @@ export async function runConversationBuildTick(
     if (!a.firstInboundAt || m.received_at < a.firstInboundAt) a.firstInboundAt = m.received_at;
     if (!a.lastInboundAt || m.received_at > a.lastInboundAt) a.lastInboundAt = m.received_at;
     a.messageIds.push(`i:${m.gmail_thread_id}:${m.received_at}`);
+  }
+
+  {
+    const byGmail = new Map<string, Agg>();
+    for (const a of byKey.values()) for (const id of a.threadIds) byGmail.set(id, a);
+    for (const m of passes) {
+      if (isLeadGenSpam(m.subject) || isOwnAddress(m.from_email, ownAddresses)) continue;
+      const root = threadRootId(m.references_header, m.in_reply_to);
+      const counterpart = pickCounterpart([m.from_email ?? ""], ownAddresses);
+      const a =
+        (root ? byRoot.get(root) : undefined) ??
+        (m.gmail_thread_id ? byGmail.get(m.gmail_thread_id) : undefined) ??
+        (counterpart ? byKey.get(threadKeyFor(counterpart, m.subject)) : undefined);
+      if (!a) continue;
+      result.inboundConsidered++;
+      if (m.gmail_thread_id) a.threadIds.add(m.gmail_thread_id);
+      if (!a.lastInboundAt || m.received_at > a.lastInboundAt) a.lastInboundAt = m.received_at;
+      a.messageIds.push(`i:${m.gmail_thread_id}:${m.received_at}`);
+    }
   }
 
   // Attaching Jayme's replies to the right conversation, thread id first

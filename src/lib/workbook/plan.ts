@@ -147,7 +147,7 @@ export type Lead = {
 
 export type Placement =
   | { artist: string; tab: string; row: number; venue: string; note: string; kind: "dated" | "undated" }
-  | { artist: string; kind: "exists" | "booked"; venue: string };
+  | { artist: string; kind: "exists" | "booked" | "withdrawn"; venue: string };
 
 export type Write = { range: string; values: Cell[][] };
 
@@ -248,6 +248,29 @@ export function promoteLead(opts: { artist: string; wb: Workbook; prior: Extract
   }
   res.writes.push({ range: `'${wb.tab}'!A${prior.row}:G${prior.row}`, values: [["", "", "", "", "", "", ""]] });
   return res;
+}
+
+/** Takes a lead back off the sheet once the venue has passed (Lake City
+ * Arts, Nov 6: still an Inquiry on Charlie's July 14 a week after Ingrid
+ * said no). Only rows this pipeline wrote and Jayme hasn't touched are
+ * cleared -- judged by the first row's note being exactly what was written;
+ * day rows after the first carry the venue but no note. */
+export function withdrawLead(wb: Workbook, p: Extract<Placement, { row: number }>): Write[] {
+  const first = wb.grid[p.row - 1] ?? [];
+  if (!sameVenue(first[2], p.venue) || String(first[6] ?? "") !== p.note) return [];
+  if (p.kind === "undated") {
+    wb.grid[p.row - 1] = [];
+    return [{ range: `'${wb.tab}'!A${p.row}:G${p.row}`, values: [["", "", "", "", "", "", ""]] }];
+  }
+  const writes: Write[] = [];
+  for (const row of wb.rowOfIso.values()) {
+    const r = wb.grid[row - 1] ?? [];
+    if (!sameVenue(r[2], p.venue) || !/^(Inquiry|Hold)$/.test(String(r[1] ?? ""))) continue;
+    if (row !== p.row && String(r[6] ?? "").trim()) continue;
+    for (let c = 1; c <= 6; c++) r[c] = "";
+    writes.push({ range: `'${wb.tab}'!B${row}:G${row}`, values: [["", "", "", "", "", ""]] });
+  }
+  return writes;
 }
 
 /** Refreshes the note on a row this pipeline wrote earlier -- but only while

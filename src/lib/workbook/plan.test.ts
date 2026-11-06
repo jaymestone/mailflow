@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cityStateFromAddress, initialsMatch, parseMasterDate, placeLead, promoteLead, readBookings, refreshNote, sameVenue, toWorkbook, type Lead } from "./plan";
+import { cityStateFromAddress, initialsMatch, parseMasterDate, placeLead, promoteLead, readBookings, withdrawLead, refreshNote, sameVenue, toWorkbook, type Lead } from "./plan";
 
 /** A 2027 workbook in miniature: header, Jan 1-10 as date serials, then the
  * "no date yet" header at the row after. */
@@ -173,5 +173,16 @@ describe("placeLead and another venue's booking", () => {
     const r = placeLead({ artist: "Rakish", bookings, today: "2026-11-06", wb: workbook(), lead: lead({ dates: [{ start: "2027-01-02", end: null, kind: "confirmed", artist: null }] }) });
     expect(r.placement.kind).toBe("undated");
     expect(r.writes[0].values[0][6]).not.toMatch(/already taken/);
+  });
+});
+
+describe("withdrawLead", () => {
+  it("clears every day row of a passed venue, but not a row Jayme edited", () => {
+    const note = "Lake City wants Jan 2 or 4.";
+    const wb = workbook({ 3: [46389, "Inquiry", "Lake City Arts", "Lake City", "CO", "", note], 5: [46391, "Inquiry", "Lake City Arts", "Lake City", "CO", "", ""] });
+    const w = withdrawLead(wb, { artist: "Rakish", tab: "Rakish 2027 Workbook", row: 3, venue: "Lake City Arts", note, kind: "dated" });
+    expect(w.map((x) => x.range)).toEqual(["'Rakish 2027 Workbook'!B3:G3", "'Rakish 2027 Workbook'!B5:G5"]);
+    const edited = workbook({ 3: [46389, "Hold", "Lake City Arts", "", "", "", "Jayme: still talking"] });
+    expect(withdrawLead(edited, { artist: "Rakish", tab: "Rakish 2027 Workbook", row: 3, venue: "Lake City Arts", note, kind: "dated" })).toEqual([]);
   });
 });

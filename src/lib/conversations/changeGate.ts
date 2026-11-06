@@ -42,7 +42,7 @@ async function latest(sb: SupabaseClient, table: string, column: string): Promis
 /** Everything the build's output depends on, reduced to a short string. */
 export async function computeSignature(sb: SupabaseClient): Promise<string> {
   const parts = await Promise.all([
-    count(sb, "inbound_messages", (q) => q.in("classification_category", ["interested", "follow_up"])),
+    count(sb, "inbound_messages", (q) => q.in("classification_category", ["interested", "follow_up", "not_interested"])),
     latest(sb, "inbound_messages", "created_at"),
     latest(sb, "inbound_messages", "classified_at"),
     count(sb, "manual_sends"),

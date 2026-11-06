@@ -114,7 +114,11 @@ async function cmdDraft(file: string) {
       threadId = r.threads?.[0]?.id || null;
     } else ({ conversation, threadId } = await stoneThread(it.conversationId!, acct));
     if (!threadId) { console.log(`SKIP ${conversation.venue}: no stone@ thread`); continue; }
-    const msgs = await readThread(threadId, acct.token);
+    // Only real mail: a draft (or a deleted draft still listed in the thread)
+    // has a Message-ID the venue never received, and replying to it breaks
+    // threading on their side (Newport, Nov 6).
+    const msgs = (await readThread(threadId, acct.token)).filter((x) => !(x.m as Gm & { labelIds?: string[] }).labelIds?.some((l) => l === "DRAFT" || l === "TRASH"));
+    if (!msgs.length) { console.log(`SKIP ${conversation.venue}: no sent or received mail in this thread`); continue; }
     const last = msgs[msgs.length - 1];
     const lastTheirs = [...msgs].reverse().find((x) => !addrs(x.from).some((a) => OWN.test(a)));
     // A thread of only Jayme's own messages (e.g. unanswered campaign mail) needs an explicit "to".

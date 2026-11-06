@@ -188,7 +188,8 @@ export function placeLead(opts: { artist: string; wb: Workbook; lead: Lead; book
   const taken: string[] = [];
   const writes: Write[] = [];
   let firstRow = 0;
-  for (const d of mine) {
+  // More than three separate options is a menu, not a date (see promoteLead).
+  for (const d of mine.length > 3 ? [] : mine) {
     const days = eachDay(d.start, d.end).filter((iso) => wb.rowOfIso.has(iso));
     if (!days.length) continue;
     const busy = days.filter((iso) => cell(wb, wb.rowOfIso.get(iso)!, 2));

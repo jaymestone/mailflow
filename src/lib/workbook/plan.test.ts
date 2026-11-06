@@ -158,6 +158,15 @@ describe("promoteLead", () => {
   });
 });
 
+describe("placeLead and a menu of dates", () => {
+  it("keeps a venue offering four or more alternative dates in 'no date yet'", () => {
+    const menu = ["2027-01-02", "2027-01-04", "2027-01-06", "2027-01-08"].map((start) => ({ start, end: null, kind: "offered", artist: null }));
+    const r = placeLead({ artist: "Rakish", bookings: [], today: "2026-11-06", wb: workbook(), lead: lead({ dates: menu }) });
+    expect(r.placement.kind).toBe("undated");
+    expect(r.writes).toHaveLength(1);
+  });
+});
+
 describe("placeLead and another venue's booking", () => {
   it("ignores a 'confirmed' date that is really the anchor booked elsewhere", () => {
     const bookings = readBookings([["Confirmed", "Rakish", "Jan 2, 2027", "Blue Waters", "", "", "Medical Lake, WA"]] as never);

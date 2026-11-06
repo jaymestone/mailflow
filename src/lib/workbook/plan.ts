@@ -177,7 +177,14 @@ export function placeLead(opts: { artist: string; wb: Workbook; lead: Lead; book
   // A fee on a thread about two artists is the thread's total, not this one's.
   const fee = lead.artists.length > 1 ? "" : money(lead.fee);
   const note = `${bookedNote}${lead.note}${lead.nextStep ? ` Next: ${lead.nextStep}` : ""}`;
-  const mine = lead.dates.filter((d) => !d.artist || d.artist === artist);
+  // A "confirmed" date that is really another venue's booking -- the pitch
+  // said "booked at Blue Waters Aug 7-8" and the summariser read it as this
+  // venue's date -- would block those days and push the lead to the bottom.
+  const mine = lead.dates.filter(
+    (d) =>
+      (!d.artist || d.artist === artist) &&
+      !(d.kind === "confirmed" && bookings.some((b) => b.artist === artist && b.range && b.range[0] <= (d.end ?? d.start) && d.start <= b.range[1] && !sameVenue(b.venue, lead.venue))),
+  );
   const taken: string[] = [];
   const writes: Write[] = [];
   let firstRow = 0;
@@ -213,6 +220,31 @@ export function placeLead(opts: { artist: string; wb: Workbook; lead: Lead; book
     placement: { artist, tab: wb.tab, row, venue: lead.venue, note: fullNote, kind: "undated" },
     writes: [{ range: `'${wb.tab}'!A${row}:G${row}`, values: [values] }],
   };
+}
+
+/** Moves a lead this pipeline put in "no date yet" onto its day rows, once
+ * the thread has turned into an offer or a hold (Jayme, 2026-11-06: the
+ * workbooks "don't seem updated" -- every West Coast offer that came in after
+ * a venue's first reply was still sitting at the bottom). Only firm dates
+ * (hold / offered) of three days or fewer move: "open Aug 12-30" stays a
+ * note, not 19 rows. The old row is cleared only if Jayme hasn't touched it;
+ * if he has, or the days are taken, nothing changes. */
+export function promoteLead(opts: { artist: string; wb: Workbook; prior: Extract<Placement, { row: number }>; lead: Lead; bookings: Booking[]; today: string }): { placement: Placement; writes: Write[] } | null {
+  const { artist, wb, prior, lead, bookings, today } = opts;
+  if (prior.kind !== "undated") return null;
+  const old = wb.grid[prior.row - 1] ?? [];
+  if (!sameVenue(old[2], prior.venue) || String(old[6] ?? "") !== prior.note) return null;
+  const dates = lead.dates.filter((d) => (d.kind === "hold" || d.kind === "offered") && eachDay(d.start, d.end).length <= 3);
+  if (!dates.length) return null;
+  const snapshot = wb.grid.map((r) => (r ? [...r] : r));
+  wb.grid[prior.row - 1] = [];
+  const res = placeLead({ artist, wb, lead: { ...lead, dates }, bookings, today });
+  if (res.placement.kind !== "dated") {
+    wb.grid.splice(0, wb.grid.length, ...snapshot);
+    return null;
+  }
+  res.writes.push({ range: `'${wb.tab}'!A${prior.row}:G${prior.row}`, values: [["", "", "", "", "", "", ""]] });
+  return res;
 }
 
 /** Refreshes the note on a row this pipeline wrote earlier -- but only while

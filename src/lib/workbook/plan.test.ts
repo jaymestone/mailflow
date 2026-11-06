@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cityStateFromAddress, initialsMatch, parseMasterDate, placeLead, readBookings, refreshNote, sameVenue, toWorkbook, type Lead } from "./plan";
+import { cityStateFromAddress, initialsMatch, parseMasterDate, placeLead, promoteLead, readBookings, refreshNote, sameVenue, toWorkbook, type Lead } from "./plan";
 
 /** A 2027 workbook in miniature: header, Jan 1-10 as date serials, then the
  * "no date yet" header at the row after. */
@@ -130,5 +130,37 @@ describe("refreshNote", () => {
 
     const edited = workbook({ 3: [46389, "Inquiry", "MIM", "", "", "", "Jayme's own words"] });
     expect(refreshNote(edited, p, "new note")).toBeNull();
+  });
+});
+
+describe("promoteLead", () => {
+  const base = { artist: "Rakish", bookings: [], today: "2026-11-06" };
+  // Row 14 is the first "no date yet" row (header row 13).
+  const undated = (note = "MIM wants Rakish.") => ({ artist: "Rakish", tab: "Rakish 2027 Workbook", row: 14, venue: "Musical Instrument Museum", note, kind: "undated" as const });
+  const bottom = (note = "MIM wants Rakish.") => ({ 14: ["No date yet", "Inquiry", "Musical Instrument Museum", "Phoenix", "AZ", "", note] });
+
+  it("moves a bottom-row lead onto its days once an offer arrives, and clears the old row", () => {
+    const wb = workbook(bottom());
+    const r = promoteLead({ ...base, wb, prior: undated(), lead: lead({ dates: [{ start: "2027-01-02", end: null, kind: "hold", artist: null }] }) })!;
+    expect(r.placement).toMatchObject({ kind: "dated", row: 3 });
+    expect(r.writes.map((w) => w.range)).toEqual(["'Rakish 2027 Workbook'!B3:G3", "'Rakish 2027 Workbook'!A14:G14"]);
+    expect(r.writes[0].values[0][0]).toBe("Hold");
+  });
+
+  it("leaves a row Jayme edited, a long open window, and taken days alone", () => {
+    expect(promoteLead({ ...base, wb: workbook(bottom("his own words")), prior: undated(), lead: lead({ dates: [{ start: "2027-01-02", end: null, kind: "hold", artist: null }] }) })).toBeNull();
+    expect(promoteLead({ ...base, wb: workbook(bottom()), prior: undated(), lead: lead({ dates: [{ start: "2027-01-02", end: "2027-01-09", kind: "offered", artist: null }] }) })).toBeNull();
+    const wb = workbook({ ...bottom(), 3: [46389, "Confirmed", "Lied Center"] });
+    expect(promoteLead({ ...base, wb, prior: undated(), lead: lead({ dates: [{ start: "2027-01-02", end: null, kind: "offered", artist: null }] }) })).toBeNull();
+    expect(wb.grid[13][2]).toBe("Musical Instrument Museum");
+  });
+});
+
+describe("placeLead and another venue's booking", () => {
+  it("ignores a 'confirmed' date that is really the anchor booked elsewhere", () => {
+    const bookings = readBookings([["Confirmed", "Rakish", "Jan 2, 2027", "Blue Waters", "", "", "Medical Lake, WA"]] as never);
+    const r = placeLead({ artist: "Rakish", bookings, today: "2026-11-06", wb: workbook(), lead: lead({ dates: [{ start: "2027-01-02", end: null, kind: "confirmed", artist: null }] }) });
+    expect(r.placement.kind).toBe("undated");
+    expect(r.writes[0].values[0][6]).not.toMatch(/already taken/);
   });
 });

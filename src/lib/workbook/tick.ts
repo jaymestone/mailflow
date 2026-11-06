@@ -7,6 +7,7 @@ import {
   fmtDay,
   fmtRange,
   placeLead,
+  promoteLead,
   readBookings,
   refreshNote,
   sameVenue,
@@ -272,6 +273,13 @@ export async function runWorkbookTick(supabase: SupabaseClient, opts: { now?: Da
       const prior = placements.find((p) => p.artist === artist);
       if (prior) {
         if ("row" in prior && prior.tab === wb.tab) {
+          const promoted = promoteLead({ artist, wb, prior, lead: v.lead, bookings, today });
+          if (promoted) {
+            placements.splice(placements.indexOf(prior), 1, promoted.placement);
+            writes.push(...promoted.writes);
+            result.placed++;
+            continue;
+          }
           const note = `${prior.note.match(/^Booked: [^)]*\)\. /)?.[0] ?? ""}${v.lead.note}${v.lead.nextStep ? ` Next: ${v.lead.nextStep}` : ""}`;
           const w = refreshNote(wb, prior, note);
           if (w) {

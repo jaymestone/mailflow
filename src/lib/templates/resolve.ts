@@ -33,7 +33,13 @@ const MERGE_FIELDS: Record<string, (c: MergeContact) => string> = {
   // Carries its own preposition so one template line fits both cases:
   // "Would you have an opening {{Room}} then?" -> "in the Lab Theater" for a
   // venue with a named small room, "at Old Town" for everyone else.
-  room: (c) => (c.room?.trim() ? `in ${c.room.trim()}` : `at ${MERGE_FIELDS.venue(c)}`),
+  // A room that already starts with a preposition ("for Lamplight Sessions
+  // at Downtown Bird") is used as written.
+  room: (c) => {
+    const r = c.room?.trim();
+    if (!r) return `at ${MERGE_FIELDS.venue(c)}`;
+    return /^(in|at|for|on|as part of) /i.test(r) ? r : `in ${r}`;
+  },
   city: (c) => c.city?.trim() || "",
   state: (c) => c.state?.trim() || "",
   "venue type": (c) => c.venue_type?.trim() || "",

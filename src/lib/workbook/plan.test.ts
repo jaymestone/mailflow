@@ -150,6 +150,8 @@ describe("promoteLead", () => {
   it("leaves a row Jayme edited, a long open window, and taken days alone", () => {
     expect(promoteLead({ ...base, wb: workbook(bottom("his own words")), prior: undated(), lead: lead({ dates: [{ start: "2027-01-02", end: null, kind: "hold", artist: null }] }) })).toBeNull();
     expect(promoteLead({ ...base, wb: workbook(bottom()), prior: undated(), lead: lead({ dates: [{ start: "2027-01-02", end: "2027-01-09", kind: "offered", artist: null }] }) })).toBeNull();
+    const menu = ["2027-01-02", "2027-01-04", "2027-01-06", "2027-01-08"].map((start) => ({ start, end: null, kind: "offered", artist: null }));
+    expect(promoteLead({ ...base, wb: workbook(bottom()), prior: undated(), lead: lead({ dates: menu }) })).toBeNull();
     const wb = workbook({ ...bottom(), 3: [46389, "Confirmed", "Lied Center"] });
     expect(promoteLead({ ...base, wb, prior: undated(), lead: lead({ dates: [{ start: "2027-01-02", end: null, kind: "offered", artist: null }] }) })).toBeNull();
     expect(wb.grid[13][2]).toBe("Musical Instrument Museum");

@@ -235,7 +235,9 @@ export function promoteLead(opts: { artist: string; wb: Workbook; prior: Extract
   const old = wb.grid[prior.row - 1] ?? [];
   if (!sameVenue(old[2], prior.venue) || String(old[6] ?? "") !== prior.note) return null;
   const dates = lead.dates.filter((d) => (d.kind === "hold" || d.kind === "offered") && eachDay(d.start, d.end).length <= 3);
-  if (!dates.length) return null;
+  // A menu of options ("Aug 11, 12, 19, 22, 25 or 26") isn't a date: spread
+  // over the calendar it pushed real offers off their days (Porter, Nov 6).
+  if (!dates.length || dates.reduce((n, d) => n + eachDay(d.start, d.end).length, 0) > 3) return null;
   const snapshot = wb.grid.map((r) => (r ? [...r] : r));
   wb.grid[prior.row - 1] = [];
   const res = placeLead({ artist, wb, lead: { ...lead, dates }, bookings, today });

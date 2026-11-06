@@ -37,6 +37,13 @@ describe("resolveMergeFields", () => {
     expect(resolveMergeFields("{{Venue}}", { venue: null, venue_short: null })).toBe("your venue");
   });
 
+  it("names the small room when one is set, else falls back to the venue", () => {
+    const line = "an opening {{Room}} then?";
+    expect(resolveMergeFields(line, { venue: "Old Town School of Folk Music", room: "the Szold Hall" })).toBe("an opening in the Szold Hall then?");
+    expect(resolveMergeFields(line, { venue: "Old Town School of Folk Music", venue_short: "Old Town", room: " " })).toBe("an opening at Old Town then?");
+    expect(resolveMergeFields(line, { venue: null })).toBe("an opening at your venue then?");
+  });
+
   it("writes the clicked artists the way a person lists names", () => {
     const one = { clicked_artists: ["Summer Camargo"] };
     const two = { clicked_artists: ["Summer Camargo", "Rakish"] };

@@ -5,6 +5,9 @@ export type MergeContact = {
   /** Short conversational form of the venue name, when the catalogue name
    * doesn't read well in a sentence. See migration 32. */
   venue_short?: string | null;
+  /** The smaller room at a venue with more than one, e.g. "the Lab Theater".
+   * See migration 44. */
+  room?: string | null;
   city?: string | null;
   state?: string | null;
   venue_type?: string | null;
@@ -27,6 +30,10 @@ const MERGE_FIELDS: Record<string, (c: MergeContact) => string> = {
   // accidentally uses the unreadable form. venue remains the fallback, so
   // the ~98% of names that already read naturally need no short form at all.
   venue: (c) => c.venue_short?.trim() || c.venue?.trim() || "your venue",
+  // Carries its own preposition so one template line fits both cases:
+  // "Would you have an opening {{Room}} then?" -> "in the Lab Theater" for a
+  // venue with a named small room, "at Old Town" for everyone else.
+  room: (c) => (c.room?.trim() ? `in ${c.room.trim()}` : `at ${MERGE_FIELDS.venue(c)}`),
   city: (c) => c.city?.trim() || "",
   state: (c) => c.state?.trim() || "",
   "venue type": (c) => c.venue_type?.trim() || "",

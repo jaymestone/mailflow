@@ -63,7 +63,7 @@ type SavedTemplate = {
   body: string;
 };
 
-const MERGE_FIELDS = ["First Name", "Last Name", "Venue", "City", "State", "Venue Type"];
+const MERGE_FIELDS = ["First Name", "Last Name", "Venue", "City", "State", "Venue Type", "Room"];
 
 export function TemplateEditor({
   campaignId,

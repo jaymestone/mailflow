@@ -298,7 +298,7 @@ const KIND_LABEL: Record<string, string> = { confirmed: "confirmed", hold: "hold
 /** Longer than this is a season ("April 2027"), not a date to show per day.
  * A range only asked about is usually the pitch's own window ("between
  * April 1 and 15"), so it shows only when it's a few days. */
-const maxTableDays = (kind: string) => (kind === "asked_about" ? 4 : 15);
+const maxTableDays = (kind: string) => (kind === "asked_about" || kind === "declined" ? 4 : 15);
 
 /** Columns K:L of a workbook's calendar, rebuilt in full each pass (Jayme,
  * Nov 10: "update all the workbooks with dates that are on and off the

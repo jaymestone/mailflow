@@ -63,6 +63,10 @@ export function computeIsLive(args: {
   lastMessageAt: string | null;
   feeAmount: number | null;
   isAgreed: boolean;
+  /** The summariser's sheet_interest, when known. */
+  interest?: string | null;
+  /** The summariser's sheet_next_step: non-empty means the ball is in Jayme's court. */
+  nextStep?: string | null;
   now?: Date;
 }): boolean {
   if (args.isAgreed) return true;
@@ -70,5 +74,18 @@ export function computeIsLive(args: {
   if (!args.lastMessageAt) return false;
   const now = args.now ?? new Date();
   const ageDays = (now.getTime() - new Date(args.lastMessageAt).getTime()) / 86_400_000;
-  return ageDays <= STALE_AFTER_DAYS;
+  if (ageDays <= STALE_AFTER_DAYS) return true;
+  return ageDays <= INTERESTED_STALE_AFTER_DAYS && isStillInPlay(args.interest, args.nextStep);
+}
+
+/** A booking season. Interest that went quiet stays on the board this long
+ * (Jayme, Nov 10 2026: Caramoor's Kathy offered Little Mercies a June
+ * festival date on Oct 6, nobody answered, and on day 31 the thread
+ * silently dropped off -- along with 200-odd others, and every "tell me
+ * when you're routing nearby" venue fell out of the Routing tab). */
+export const INTERESTED_STALE_AFTER_DAYS = 180;
+const IN_PLAY = new Set(["specific_date", "artist_no_date", "if_routing", "talk_later"]);
+function isStillInPlay(interest?: string | null, nextStep?: string | null): boolean {
+  if (interest === "declined") return false;
+  return IN_PLAY.has(interest ?? "") || Boolean(nextStep?.trim());
 }

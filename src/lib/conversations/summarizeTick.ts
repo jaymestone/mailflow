@@ -172,6 +172,8 @@ export async function runConversationSummarizeTick(
         lastMessageAt: row.last_message_at,
         feeAmount: summary.fee_amount,
         isAgreed: summary.is_agreed,
+        interest: summary.sheet_interest,
+        nextStep: summary.next_action,
         now,
       });
 

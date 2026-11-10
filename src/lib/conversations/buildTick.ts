@@ -288,11 +288,13 @@ export async function runConversationBuildTick(
     fee_amount: number | null;
     revision: number;
     is_live: boolean;
+    sheet_interest: string | null;
+    sheet_next_step: string | null;
     last_message_at: string | null;
     last_direction: "inbound" | "outbound" | null;
   };
   const EXISTING_COLUMNS =
-    "id, thread_key, gmail_thread_ids, status, status_override, venue, region, fee_amount, revision, is_live, last_message_at, last_direction";
+    "id, thread_key, gmail_thread_ids, status, status_override, venue, region, fee_amount, revision, is_live, last_message_at, last_direction, sheet_interest, sheet_next_step";
   let existing: Existing[];
   try {
     existing = await readAll<Existing>(supabase, "conversations", `${EXISTING_COLUMNS}, thread_id`);
@@ -378,7 +380,7 @@ export async function runConversationBuildTick(
     const isAgreed = prior?.status === "confirmed";
     const isSmall = prior?.status === "parked";
     const status = computeStatus({ isAgreed, isSmall, feeAmount, lastDirection });
-    const isLive = computeIsLive({ lastMessageAt, feeAmount, isAgreed, now });
+    const isLive = computeIsLive({ lastMessageAt, feeAmount, isAgreed, interest: prior?.sheet_interest, nextStep: prior?.sheet_next_step, now });
     if (prior?.is_live && !isLive) result.droppedStale++;
     if (prior) result.updated++;
     else result.created++;

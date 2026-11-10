@@ -68,3 +68,21 @@ describe("computeIsLive", () => {
     expect(computeIsLive({ lastMessageAt: null, feeAmount: null, isAgreed: false, now })).toBe(false);
   });
 });
+
+describe("computeIsLive for interest that went quiet", () => {
+  const now = new Date("2026-11-10T00:00:00Z");
+  const old = "2026-10-06T00:00:00Z"; // 35 days
+  it("keeps a venue that named a date or artist", () => {
+    expect(computeIsLive({ lastMessageAt: old, feeAmount: null, isAgreed: false, interest: "specific_date", now })).toBe(true);
+  });
+  it("keeps a thread where the ball is in Jayme's court", () => {
+    expect(computeIsLive({ lastMessageAt: old, feeAmount: null, isAgreed: false, interest: "general_roster", nextStep: "Send top two picks", now })).toBe(true);
+  });
+  it("drops a pass, and a polite note with nothing to do", () => {
+    expect(computeIsLive({ lastMessageAt: old, feeAmount: null, isAgreed: false, interest: "declined", nextStep: "x", now })).toBe(false);
+    expect(computeIsLive({ lastMessageAt: old, feeAmount: null, isAgreed: false, interest: "general_roster", nextStep: "", now })).toBe(false);
+  });
+  it("still drops interest after a season", () => {
+    expect(computeIsLive({ lastMessageAt: "2026-04-01T00:00:00Z", feeAmount: null, isAgreed: false, interest: "if_routing", now })).toBe(false);
+  });
+});

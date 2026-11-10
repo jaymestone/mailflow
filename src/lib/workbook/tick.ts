@@ -9,6 +9,9 @@ import {
   placeLead,
   promoteLead,
   withdrawLead,
+  isPlaceholder,
+  tableColumns,
+  type TableEntry,
   readBookings,
   refreshNote,
   sameVenue,
@@ -314,6 +317,22 @@ export async function runWorkbookTick(supabase: SupabaseClient, opts: { now?: Da
     }
     v.c.sheet_placements = placements;
   }
+  // ---- 2b. On / off the table: every venue talking about each day ---------
+  for (const [artist, wb] of books) {
+    const entries: TableEntry[] = [];
+    const add = (venue: string, lead: Pick<Lead, "artists" | "dates" | "fee">, off: TableEntry["off"]) => {
+      for (const d of lead.dates) {
+        if (d.artist ? d.artist !== artist : !lead.artists.includes(artist)) continue;
+        // The pitch's anchor show read as this venue's date (see placeLead).
+        if (d.kind === "confirmed" && bookings.some((b) => b.artist === artist && b.range && b.range[0] <= (d.end ?? d.start) && d.start <= b.range[1] && !sameVenue(b.venue, venue))) continue;
+        entries.push({ venue, start: d.start, end: d.end, kind: d.kind, fee: lead.artists.length > 1 ? null : lead.fee, off });
+      }
+    };
+    // "Talk later" means not this time: the dates they discussed are off the table.
+    for (const v of view) add(v.lead.venue, v.lead, v.lead.interest === "talk_later" ? "not now" : false);
+    for (const c of all) if (c.sheet_interest === "declined" && c.venue) add(c.venue, { artists: c.sheet_artists ?? [], dates: c.sheet_dates ?? [], fee: null }, "passed");
+    writes.push(tableColumns(wb, entries));
+  }
   if (writes.length) await batchUpdateValues(SHEET, writes, "RAW");
   for (const v of view) {
     const changed = !v.c.sheet_synced_at || (v.c.summarized_at && v.c.summarized_at > v.c.sheet_synced_at);
@@ -342,7 +361,7 @@ export async function runWorkbookTick(supabase: SupabaseClient, opts: { now?: Da
     const unavailable = new Set<string>();
     for (const [iso, row] of wb.rowOfIso) {
       const r = wb.grid[row - 1] ?? [];
-      const venue = String(r[2] ?? "").trim();
+      const venue = isPlaceholder(r[2]) ? "" : String(r[2] ?? "").trim();
       if (venue) cal.set(iso, { venue, status: String(r[1] ?? "").trim() || "—", city: String(r[3] ?? ""), state: String(r[4] ?? "") });
       const avail = String(r[7] ?? "").trim();
       if (avail === "Unavailable") unavailable.add(iso);

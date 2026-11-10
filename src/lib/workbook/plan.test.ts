@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cityStateFromAddress, initialsMatch, parseMasterDate, placeLead, promoteLead, readBookings, withdrawLead, refreshNote, sameVenue, toWorkbook, type Lead } from "./plan";
+import { cityStateFromAddress, initialsMatch, parseMasterDate, placeLead, promoteLead, readBookings, withdrawLead, refreshNote, sameVenue, tableColumns, toWorkbook, type Lead } from "./plan";
 
 /** A 2027 workbook in miniature: header, Jan 1-10 as date serials, then the
  * "no date yet" header at the row after. */
@@ -184,5 +184,32 @@ describe("withdrawLead", () => {
     expect(w.map((x) => x.range)).toEqual(["'Rakish 2027 Workbook'!B3:G3", "'Rakish 2027 Workbook'!B5:G5"]);
     const edited = workbook({ 3: [46389, "Hold", "Lake City Arts", "", "", "", "Jayme: still talking"] });
     expect(withdrawLead(edited, { artist: "Rakish", tab: "Rakish 2027 Workbook", row: 3, venue: "Lake City Arts", note, kind: "dated" })).toEqual([]);
+  });
+});
+
+describe("Jayme's \"Fill in\" days", () => {
+  it("are open days a lead can take", () => {
+    const wb = workbook({ 3: [46389, "", "Fill in"] }); // Jan 2
+    const res = placeLead({ artist: "Rakish", wb, lead: lead({ dates: [{ start: "2027-01-02", end: null, kind: "offered" }] }), bookings: [], today: "2026-11-10" });
+    expect(res.placement.kind).toBe("dated");
+    expect(res.writes[0].range).toBe("'Rakish 2027 Workbook'!B3:G3");
+  });
+});
+
+describe("tableColumns", () => {
+  it("lists every other venue on each day, and the ones that passed", () => {
+    const wb = workbook({ 3: [46389, "Hold", "Muddy Creek"] }); // Jan 2
+    const w = tableColumns(wb, [
+      { venue: "Muddy Creek", start: "2027-01-02", end: null, kind: "hold", fee: null, off: false as const },
+      { venue: "Surry Arts", start: "2027-01-02", end: "2027-01-03", kind: "asked_about", fee: null, off: false as const },
+      { venue: "Folkmoot", start: "2027-01-02", end: null, kind: "offered", fee: 600, off: false as const },
+      { venue: "Thomasville", start: "2027-01-03", end: null, kind: "asked_about", fee: null, off: "passed" as const },
+      { venue: "All April", start: "2027-01-01", end: "2027-01-30", kind: "asked_about", fee: null, off: false as const },
+    ]);
+    expect(w.range).toBe("'Rakish 2027 Workbook'!K1:L11");
+    expect(w.values[0]).toEqual(["On the table", "Off the table"]);
+    expect(w.values[2]).toEqual(["Surry Arts (asked) · Folkmoot (open for them, $600)", ""]);
+    expect(w.values[3]).toEqual(["Surry Arts (asked)", "Thomasville (passed)"]);
+    expect(w.values[1]).toEqual(["", ""]);
   });
 });

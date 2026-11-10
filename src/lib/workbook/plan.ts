@@ -117,6 +117,12 @@ export function toWorkbook(tab: string, grid: Cell[][]): Workbook {
 
 const cell = (wb: Workbook, row: number, col: number) => String(wb.grid[row - 1]?.[col] ?? "").trim();
 
+/** Jayme's own marker for a day he wants filled ("Fill in" in the venue
+ * column, Nov 2026) -- an open day, not a booking. Treated as taken, it sent
+ * every North Carolina reply about Apr 9-11 to "no date yet". */
+export const isPlaceholder = (v: unknown) => /^(fill( in)?|open|tbd|\?+)$/i.test(String(v ?? "").trim());
+const venueAt = (wb: Workbook, row: number) => (isPlaceholder(cell(wb, row, 2)) ? "" : cell(wb, row, 2));
+
 /** The first row of the "no date yet" section that is free. */
 function nextBottomRow(wb: Workbook): number {
   const header = wb.grid.findIndex((r) => /^Target Window$/i.test(String(r[0] ?? "").trim()));
@@ -182,6 +188,7 @@ export function placeLead(opts: { artist: string; wb: Workbook; lead: Lead; book
   // venue's date -- would block those days and push the lead to the bottom.
   const mine = lead.dates.filter(
     (d) =>
+      d.kind !== "declined" &&
       (!d.artist || d.artist === artist) &&
       !(d.kind === "confirmed" && bookings.some((b) => b.artist === artist && b.range && b.range[0] <= (d.end ?? d.start) && d.start <= b.range[1] && !sameVenue(b.venue, lead.venue))),
   );
@@ -192,9 +199,9 @@ export function placeLead(opts: { artist: string; wb: Workbook; lead: Lead; book
   for (const d of mine.length > 3 ? [] : mine) {
     const days = eachDay(d.start, d.end).filter((iso) => wb.rowOfIso.has(iso));
     if (!days.length) continue;
-    const busy = days.filter((iso) => cell(wb, wb.rowOfIso.get(iso)!, 2));
+    const busy = days.filter((iso) => venueAt(wb, wb.rowOfIso.get(iso)!));
     if (busy.length) {
-      taken.push(...busy.map((iso) => `${fmtDay(iso)} (${cell(wb, wb.rowOfIso.get(iso)!, 2)})`));
+      taken.push(...busy.map((iso) => `${fmtDay(iso)} (${venueAt(wb, wb.rowOfIso.get(iso)!)})`));
       continue;
     }
     days.forEach((iso, i) => {
@@ -282,4 +289,43 @@ export function refreshNote(wb: Workbook, p: Extract<Placement, { row: number }>
   if (!sameVenue(row[2], p.venue) || String(row[6] ?? "") !== p.note) return null;
   row[6] = newNote;
   return { range: `'${wb.tab}'!G${p.row}`, values: [[newNote]] };
+}
+
+/** One venue's date for one artist, for the "on / off the table" columns. */
+export type TableEntry = { venue: string; start: string; end: string | null; kind: string; fee: number | null; off: false | "passed" | "not now" };
+
+const KIND_LABEL: Record<string, string> = { confirmed: "confirmed", hold: "hold", offered: "open for them", asked_about: "asked" };
+/** Longer than this is a season ("April 2027"), not a date to show per day.
+ * A range only asked about is usually the pitch's own window ("between
+ * April 1 and 15"), so it shows only when it's a few days. */
+const maxTableDays = (kind: string) => (kind === "asked_about" ? 4 : 15);
+
+/** Columns K:L of a workbook's calendar, rebuilt in full each pass (Jayme,
+ * Nov 10: "update all the workbooks with dates that are on and off the
+ * table so I can see clearly the routing possibilities"). Column C holds one
+ * venue per day, so every other venue talking about that day -- asked,
+ * offered or held -- is listed in K, and venues that passed on it in L. */
+export function tableColumns(wb: Workbook, entries: TableEntry[]): Write {
+  const rows = [...wb.rowOfIso.values()];
+  const last = Math.max(...rows, 1);
+  const on = new Map<number, string[]>();
+  const offMap = new Map<number, string[]>();
+  for (const e of entries) {
+    const days = eachDay(e.start, e.end);
+    if (days.length > maxTableDays(e.kind)) continue;
+    const off = e.kind === "declined" ? "passed" : e.off;
+    for (const iso of days) {
+      const row = wb.rowOfIso.get(iso);
+      if (!row) continue;
+      if (!off && sameVenue(cell(wb, row, 2), e.venue)) continue;
+      const label = off ? `${e.venue} (${off})` : `${e.venue} (${[KIND_LABEL[e.kind] ?? "asked", money(e.fee)].filter(Boolean).join(", ")})`;
+      const m = off ? offMap : on;
+      const list = m.get(row) ?? [];
+      if (!list.some((x) => x.startsWith(e.venue + " ("))) list.push(label);
+      m.set(row, list);
+    }
+  }
+  const values: Cell[][] = [["On the table", "Off the table"]];
+  for (let row = 2; row <= last; row++) values.push([(on.get(row) ?? []).join(" · "), (offMap.get(row) ?? []).join(" · ")]);
+  return { range: `'${wb.tab}'!K1:L${last}`, values };
 }

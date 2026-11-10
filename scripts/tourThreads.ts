@@ -105,11 +105,13 @@ async function cmdRead(ids: string[]) {
 
 async function cmdDraft(file: string) {
   const stone = await stoneAccount();
-  const items: { conversationId?: string; account?: string; threadQuery?: string; venue?: string; to?: string; cc?: string[]; subject?: string; body: string }[] = JSON.parse(readFileSync(file, "utf8"));
+  const items: { conversationId?: string; account?: string; threadId?: string; threadQuery?: string; venue?: string; to?: string; cc?: string[]; subject?: string; body: string }[] = JSON.parse(readFileSync(file, "utf8"));
   for (const it of items) {
     const acct = it.account ? await account(it.account) : stone;
     let conversation: any = { venue: it.venue }, threadId: string | null = null;
-    if (it.threadQuery) {
+    if (it.threadId) {
+      threadId = it.threadId;
+    } else if (it.threadQuery) {
       const r = await gmail(acct.token, `threads?maxResults=1&q=${encodeURIComponent(it.threadQuery)}`);
       threadId = r.threads?.[0]?.id || null;
     } else ({ conversation, threadId } = await stoneThread(it.conversationId!, acct));

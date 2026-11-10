@@ -126,7 +126,12 @@ const SCHEMA = {
         properties: {
           start: { type: "string", description: "YYYY-MM-DD" },
           end: { type: ["string", "null"], description: "YYYY-MM-DD for a multi-day run, else null" },
-          kind: { type: "string", enum: ["confirmed", "hold", "offered", "asked_about"] },
+          kind: {
+            type: "string",
+            enum: ["confirmed", "hold", "offered", "asked_about", "declined"],
+            description:
+              "confirmed: this venue booked it. hold: this venue is holding it. offered: the VENUE proposed or said it has this date open. asked_about: Jayme proposed or asked about it and the venue hasn't said yes or no. declined: the venue said it can't do this date or turned it down. A date the pitch names as a show at ANOTHER venue (the anchor, e.g. 'booked at Blue Waters Aug 7-8') is never this venue's date: leave it out.",
+          },
           artist: {
             anyOf: [{ type: "string", enum: [...SHEET_ROSTER] }, { type: "null" }],
             description: "Which roster artist this date is for, when the thread ties it to one. Null if the date is for the venue generally.",

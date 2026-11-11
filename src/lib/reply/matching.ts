@@ -6,7 +6,7 @@ export type MatchResult = {
   campaignId: string | null;
   contactId: string | null;
   outboundSendId: string | null;
-  matchMethod: "message_id" | "tracking_token" | "quoted_recipient" | "sender_email" | "unmatched";
+  matchMethod: "message_id" | "tracking_token" | "quoted_recipient" | "sender_email" | "subject" | "unmatched";
   /** Other contact records that this same reply evidently also covers.
    *
    * One human can sit in the list under two records -- a forwarding
@@ -177,7 +177,64 @@ export async function matchInboundMessage(
     }
   }
 
+  // 4. The subject line against what we sent (Nov 10 2026). Gmail replaces
+  // the Message-ID we stamp at send time, so step 1 rarely fires, and a
+  // reply from a different address than the one mailed (Olivier at Barbès
+  // answered BarbesBookings@'s pitch from his own gmail) skipped 3a/3b
+  // too -- he said yes on Nov 3 and got a follow-up on Nov 10. Pitch
+  // subjects name the venue ("Amanda Pascali X Barbès"), so a subject
+  // that was sent to exactly one contact identifies the thread.
+  // Jayme's own mail (a forward, a note to self) is never a venue's reply.
+  const own = /@jaymestone(agency)?\.com$/i.test(email.fromEmail);
+  const bySubject = own ? null : await contactBySubject(supabase, email.subject);
+  if (bySubject) {
+    return {
+      campaignId: bySubject.campaignId,
+      contactId: bySubject.contactId,
+      outboundSendId: bySubject.outboundSendId,
+      matchMethod: "subject",
+      alsoImplicatedContactIds: senderContact && senderContact.id !== bySubject.contactId && (await activeMembership(supabase, senderContact.id)) ? [senderContact.id] : [],
+    };
+  }
+
   return UNMATCHED;
+}
+
+/** "Re: Fwd: Amanda Pascali X Barbès" -> "Amanda Pascali X Barbès". */
+export function baseSubject(subject: string | null | undefined): string {
+  let s = String(subject ?? "").trim();
+  for (let prev = ""; prev !== s; ) { prev = s; s = s.replace(/^\s*(re|fwd?|fw|aw|sv|tr)\s*(\[\d+\])?\s*:\s*/i, "").replace(/^\[external\]\s*/i, "").trim(); }
+  return s;
+}
+
+/** The one contact a subject line was sent to in the last 120 days, if
+ * exactly one. Shared subjects ("The Little Mercies on the West Coast,
+ * August 2027") resolve to many contacts and so to nothing. */
+export async function contactBySubject(
+  supabase: SupabaseClient,
+  subject: string | null | undefined,
+): Promise<{ contactId: string; campaignId: string; outboundSendId: string } | null> {
+  const base = baseSubject(subject);
+  if (base.length < 12) return null;
+  const since = new Date(Date.now() - 120 * 864e5).toISOString();
+  // ilike treats % and _ as wildcards; escaped, then re-verified in JS.
+  const pat = base.replace(/([%_\\])/g, "\\$1");
+  const found: { id: string; contact_id: string; campaign_id: string; subject_resolved: string | null; sent_at: string }[] = [];
+  for (const p of [pat, `Re: ${pat}`]) {
+    const { data } = await supabase
+      .from("outbound_sends")
+      .select("id, contact_id, campaign_id, subject_resolved, sent_at")
+      .ilike("subject_resolved", p)
+      .gte("sent_at", since)
+      .order("sent_at", { ascending: false })
+      .limit(50);
+    found.push(...(data ?? []));
+  }
+  const data = found.sort((x, y) => y.sent_at.localeCompare(x.sent_at));
+  const rows = (data ?? []).filter((r) => baseSubject(r.subject_resolved).toLowerCase() === base.toLowerCase());
+  const contacts = new Set(rows.map((r) => r.contact_id));
+  if (contacts.size !== 1) return null;
+  return { contactId: rows[0].contact_id, campaignId: rows[0].campaign_id, outboundSendId: rows[0].id };
 }
 
 /** Finds contact records other than `primaryId` that this same reply

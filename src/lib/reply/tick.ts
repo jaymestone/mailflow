@@ -358,9 +358,7 @@ export async function processOneMessage(
     // after applyCategoryLabel below actually succeeds, so a message whose
     // label call fails is correctly left in the "needs a label retry"
     // state (see retryLabelOnly) rather than looking fully done.
-    const { data: inserted } = await supabase
-      .from("inbound_messages")
-      .insert({
+    const row = {
         connected_account_id: account.id,
         gmail_message_id: email.gmailMessageId,
         gmail_thread_id: email.gmailThreadId,
@@ -383,9 +381,12 @@ export async function processOneMessage(
         classification_category: category,
         ooo_return_date: category === "ooo_temporary" ? oooReturnDate : null,
         classified_at: new Date().toISOString(),
-      })
-      .select("id")
-      .single();
+    };
+    let { data: inserted, error: insertError } = await supabase.from("inbound_messages").insert(row).select("id").single();
+    // Until migration 45 adds 'subject' to the enum, keep the match (the
+    // contact id is what stops the sequence) under the old label.
+    if (insertError && row.match_method === "subject")
+      ({ data: inserted, error: insertError } = await supabase.from("inbound_messages").insert({ ...row, match_method: "quoted_recipient" }).select("id").single());
 
     // One human, two contact records: the reply answers a thread sent to
     // one of them and arrives from the other's address, so only one gets

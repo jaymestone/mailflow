@@ -407,3 +407,12 @@ describe("matchInboundMessage — one human under two contact records", () => {
     expect(result.alsoImplicatedContactIds).toEqual([]);
   });
 });
+
+describe("baseSubject", () => {
+  it("strips reply and forward prefixes, however stacked", async () => {
+    const { baseSubject } = await import("./matching");
+    expect(baseSubject("Re: Amanda Pascali X Barbès")).toBe("Amanda Pascali X Barbès");
+    expect(baseSubject("RE: Fwd: FW: [EXTERNAL] Re: Amanda Pascali X Montclair State")).toBe("Amanda Pascali X Montclair State");
+    expect(baseSubject("AW: Lily Henley X Klezmer.welten")).toBe("Lily Henley X Klezmer.welten");
+  });
+});

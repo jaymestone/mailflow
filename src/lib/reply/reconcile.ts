@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { resolveResumeAt } from "./tick";
+import { contactBySubject } from "./matching";
 import type { ReplyCategory } from "./types";
 
 // A reply only stops a contact's sequence if it actually matched them:
@@ -123,7 +124,16 @@ export async function runReconcileTick(
             .select("id, email, venue")
             .ilike("email", sender.replace(/([%_\\])/g, "\\$1"))
             .limit(5);
-          const contact = (found ?? []).find((c) => c.email.toLowerCase() === sender);
+          let contact = (found ?? []).find((c) => c.email.toLowerCase() === sender);
+          // A reply from an address we never mailed (a booker's own gmail
+          // answering the venue inbox's pitch): the subject names the thread.
+          if (!contact && !/@jaymestone(agency)?\.com$/i.test(sender)) {
+            const bySubject = await contactBySubject(supabase, msg.subject);
+            if (bySubject) {
+              const { data: c } = await supabase.from("contacts").select("id, email, venue").eq("id", bySubject.contactId).maybeSingle();
+              contact = c ?? undefined;
+            }
+          }
           if (!contact) return null;
 
           const { data: activeMembers } = await supabase

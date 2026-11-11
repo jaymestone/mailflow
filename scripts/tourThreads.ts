@@ -22,6 +22,9 @@
 import { createClient } from "@supabase/supabase-js";
 import { readFileSync } from "fs";
 import { getAccessToken, encodeHeaderWord } from "../src/lib/gmail/client";
+import { batchGet } from "../src/lib/workbook/sheets";
+import { MASTER_SPREADSHEET_ID, SHEET_ROSTER } from "../src/lib/workbook/roster";
+import { norm, readBookings, sameVenue, type Booking } from "../src/lib/workbook/plan";
 
 const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
 const REPLY_FROM = "stone@jaymestone.com";
@@ -103,9 +106,33 @@ async function cmdRead(ids: string[]) {
   }
 }
 
+
+// Played-here guard (Nov 11 2026). A draft that names a roster artist who has
+// played, or is booked at, the recipient's venue in the last 18 months is
+// refused unless the item says "allowPlayed": true. Amanda was pitched to Dyck
+// Arboretum (Hesston KS) as a "top pick" a month before her Dec 6 2026 show
+// there; La Grua got her cold pitch five months after she played it.
+let bookingsCache: Booking[] | null = null;
+async function playedConflicts(body: string, to: string, venueHint?: string | null): Promise<string[]> {
+  bookingsCache ??= readBookings((await batchGet(MASTER_SPREADSHEET_ID, ["Master!A2:H3000"]))[0]);
+  const cutoff = new Date(Date.now() - 548 * 864e5).toISOString().slice(0, 10);
+  const email = (to.match(/[^\s<>,;"]+@[^\s<>,;"]+/) || [""])[0].toLowerCase();
+  const { data: c } = email ? await supabase.from("contacts").select("venue,venue_short,city").ilike("email", email).maybeSingle() : { data: null };
+  const { data: convs } = email ? await supabase.from("conversations").select("venue").ilike("thread_key", `${email.replace(/([%_\\])/g, "\\$1")}::%`).limit(5) : { data: [] };
+  const names = [venueHint, c?.venue, c?.venue_short, ...(convs || []).map((x) => x.venue)].filter((x): x is string => Boolean(x && norm(x).length >= 5));
+  const named = SHEET_ROSTER.filter((a) => new RegExp(a.replace(/^The /, "").replace(/[.*+?^${}()|[\]\\&]/g, "\\$&"), "i").test(body));
+  const out: string[] = [];
+  for (const b of bookingsCache) {
+    if (!named.includes(b.artist as (typeof SHEET_ROSTER)[number]) || !b.range || b.range[1] < cutoff) continue;
+    const hit = names.some((n) => sameVenue(b.venue, n) || norm(b.venue).includes(norm(n)) || norm(n).includes(norm(b.venue)));
+    if (hit) out.push(`${b.artist} @ ${b.venue} ${b.dateText} (${b.status})`);
+  }
+  return out;
+}
+
 async function cmdDraft(file: string) {
   const stone = await stoneAccount();
-  const items: { conversationId?: string; account?: string; threadId?: string; threadQuery?: string; venue?: string; to?: string; cc?: string[]; subject?: string; body: string }[] = JSON.parse(readFileSync(file, "utf8"));
+  const items: { conversationId?: string; account?: string; threadId?: string; threadQuery?: string; venue?: string; to?: string; cc?: string[]; subject?: string; body: string; allowPlayed?: boolean }[] = JSON.parse(readFileSync(file, "utf8"));
   for (const it of items) {
     const acct = it.account ? await account(it.account) : stone;
     let conversation: any = { venue: it.venue }, threadId: string | null = null;
@@ -128,6 +155,8 @@ async function cmdDraft(file: string) {
     // "to" overrides the recipient, e.g. the colleague someone introduced; the
     // introducer then lands in Cc with everyone else from the venue side.
     const to = (it.to || addrs(lastTheirs!.from)[0]).toLowerCase();
+    const played = it.allowPlayed ? [] : await playedConflicts(it.body, to, conversation.venue);
+    if (played.length) { console.log(`BLOCKED ${conversation.venue}: names an artist who played/is booked there: ${played.join("; ")} (set "allowPlayed": true if intended)`); continue; }
     const cc = it.cc ?? [...new Set(msgs.flatMap((x) => [...addrs(x.from), ...addrs(x.to), ...addrs(x.cc)]))]
       .filter((a) => a !== (addrs(to)[0] || to) && !OWN.test(a) && !/mailer-daemon|noreply|no-reply/.test(a));
     // "subject" renames the thread (it still threads via In-Reply-To/References).
@@ -177,8 +206,10 @@ function mime(from: string, headers: string[], body: string) {
 
 async function cmdNew(file: string) {
   const acct = await stoneAccount();
-  const items: { to: string; cc?: string[]; subject: string; body: string }[] = JSON.parse(readFileSync(file, "utf8"));
+  const items: { to: string; cc?: string[]; subject: string; body: string; allowPlayed?: boolean }[] = JSON.parse(readFileSync(file, "utf8"));
   for (const it of items) {
+    const played = it.allowPlayed ? [] : await playedConflicts(it.body, it.to);
+    if (played.length) { console.log(`BLOCKED "${it.subject}": names an artist who played/is booked there: ${played.join("; ")} (set "allowPlayed": true if intended)`); continue; }
     const raw = mime(acct.email, [`To: ${it.to}`, ...(it.cc?.length ? [`Cc: ${it.cc.join(", ")}`] : []), `Subject: ${encodeHeaderWord(it.subject)}`], it.body);
     const d = await gmail(acct.token, "drafts", { method: "POST", body: JSON.stringify({ message: { raw: Buffer.from(raw).toString("base64url") } }) });
     console.log(`NEW DRAFT [${acct.email}] "${it.subject}" to ${it.to}${it.cc?.length ? ` cc ${it.cc.join(", ")}` : ""} (draft ${d.id})`);

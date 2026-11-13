@@ -35,9 +35,15 @@ const SIGNATURE_HTML = 'Kindly,<br><br>◙◙◙&nbsp;&nbsp; Jayme Stone<br>◙�
 // Bodies may use [TEXT](url) for links, the way Jayme links artist names,
 // and *Title* for italics (album titles).
 const esc = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-const toText = (b: string) => b.replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, "$1 <$2>").replace(/\*([^*\n]+)\*/g, "$1");
+// The approval line: an orange ▶ and bold text so Jayme can't miss it (Nov 13).
+// Bodies just start with "DELETE THIS LINE TO APPROVE"; it's expanded here.
+const APPROVE = "DELETE THIS LINE TO APPROVE";
+const APPROVE_TEXT = "▶ DELETE THIS LINE TO APPROVE — SENDS AT 11AM, 2PM OR 5PM ET";
+const APPROVE_HTML = '<b><span style="color:#e8710a;font-size:16px">▶</span> <span style="color:#e8710a">DELETE THIS LINE TO APPROVE</span> — SENDS AT 11AM, 2PM OR 5PM ET</b>';
+const expandApprove = (b: string) => b.replace(/^\s*▶?\s*DELETE THIS LINE TO APPROVE[^\n]*/, APPROVE);
+const toText = (b: string) => expandApprove(b).replace(/^DELETE THIS LINE TO APPROVE/, APPROVE_TEXT).replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, "$1 <$2>").replace(/\*([^*\n]+)\*/g, "$1");
 const toHtml = (b: string) =>
-  b.split(/\n{2,}/).map((para) => `<div>${esc(para).replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, '<a href="$2">$1</a>').replace(/\*([^*\n]+)\*/g, "<i>$1</i>").replace(/\n/g, "<br>")}</div>`).join("<div><br></div>");
+  expandApprove(b).split(/\n{2,}/).map((para) => `<div>${esc(para).replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, '<a href="$2">$1</a>').replace(/\*([^*\n]+)\*/g, "<i>$1</i>").replace(/\n/g, "<br>")}</div>`).join("<div><br></div>").replace(`<div>${APPROVE}</div>`, `<div>${APPROVE_HTML}</div>`);
 
 type Gm = { id: string; threadId: string; payload: any; internalDate: string };
 

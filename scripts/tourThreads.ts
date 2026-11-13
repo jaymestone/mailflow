@@ -108,7 +108,8 @@ async function cmdRead(ids: string[]) {
     console.log(`\n######## ${conversation.venue} (${id}) thread=${threadId}`);
     if (!threadId) continue;
     const msgs = await readThread(threadId, acct.token);
-    for (const x of msgs.slice(-5)) console.log(`--- ${x.date} | ${x.from}\n${x.text.slice(0, 1200)}`);
+    // Label drafts: a draft read as sent mail once had me tell Jayme an email went out (Olli, Nov 13).
+    for (const x of msgs.slice(-5)) { const lab = (x.m as Gm & { labelIds?: string[] }).labelIds || []; const tag = lab.includes("DRAFT") ? " [DRAFT — NOT SENT]" : lab.includes("SENT") ? " [sent]" : ""; console.log(`--- ${x.date} | ${x.from}${tag}\n${x.text.slice(0, 1200)}`); }
   }
 }
 

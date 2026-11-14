@@ -195,8 +195,12 @@ export function placeLead(opts: { artist: string; wb: Workbook; lead: Lead; book
   const taken: string[] = [];
   const writes: Write[] = [];
   let firstRow = 0;
-  // More than three separate options is a menu, not a date (see promoteLead).
-  for (const d of mine.length > 3 ? [] : mine) {
+  // More than three separate options is a menu. It used to stay in "no date
+  // yet", which hid Falcon Bowl's seven October dates from Jayme (Nov 14).
+  // Now a menu fills only the days that are free, each marked as one option;
+  // taken days keep their venue and the rest show in K and Date Options.
+  const menu = mine.length > 3 ? ` (one of ${mine.length} dates offered)` : "";
+  for (const d of mine) {
     const days = eachDay(d.start, d.end).filter((iso) => wb.rowOfIso.has(iso));
     if (!days.length) continue;
     const busy = days.filter((iso) => venueAt(wb, wb.rowOfIso.get(iso)!));
@@ -206,13 +210,13 @@ export function placeLead(opts: { artist: string; wb: Workbook; lead: Lead; book
     }
     days.forEach((iso, i) => {
       const row = wb.rowOfIso.get(iso)!;
-      const values: Cell[] = [STATUS_FOR_KIND[d.kind] ?? "Inquiry", lead.venue, lead.city, lead.state, i === 0 && !firstRow ? fee : "", i === 0 && !firstRow ? note : ""];
+      const values: Cell[] = [STATUS_FOR_KIND[d.kind] ?? "Inquiry", lead.venue, lead.city, lead.state, i === 0 && !firstRow ? fee : "", i === 0 && !firstRow ? note + menu : ""];
       setRow(wb, row, 1, values);
       writes.push({ range: `'${wb.tab}'!B${row}:G${row}`, values: [values] });
       if (!firstRow) firstRow = row;
     });
   }
-  if (firstRow) return { placement: { artist, tab: wb.tab, row: firstRow, venue: lead.venue, note, kind: "dated" }, writes };
+  if (firstRow) return { placement: { artist, tab: wb.tab, row: firstRow, venue: lead.venue, note: note + menu, kind: "dated" }, writes };
 
   const when = [...mine.map(fmtRange), lead.window ?? "", lead.interest === "if_routing" ? `If routing near ${lead.routingArea ?? lead.city}` : ""]
     .filter(Boolean)
@@ -245,7 +249,10 @@ export function promoteLead(opts: { artist: string; wb: Workbook; prior: Extract
   const dates = lead.dates.filter((d) => (d.kind === "hold" || d.kind === "offered") && eachDay(d.start, d.end).length <= 3);
   // A menu of options ("Aug 11, 12, 19, 22, 25 or 26") isn't a date: spread
   // over the calendar it pushed real offers off their days (Porter, Nov 6).
-  if (!dates.length || dates.reduce((n, d) => n + eachDay(d.start, d.end).length, 0) > 3) return null;
+  // Up to three days, or a menu of single dates (filled where free, see placeLead).
+  const total = dates.reduce((n, d) => n + eachDay(d.start, d.end).length, 0);
+  const isMenu = dates.length > 3 && dates.length <= 12 && total <= 16 && dates.every((d) => eachDay(d.start, d.end).length <= 2);
+  if (!dates.length || (total > 3 && !isMenu)) return null;
   const snapshot = wb.grid.map((r) => (r ? [...r] : r));
   wb.grid[prior.row - 1] = [];
   const res = placeLead({ artist, wb, lead: { ...lead, dates }, bookings, today });

@@ -150,8 +150,6 @@ describe("promoteLead", () => {
   it("leaves a row Jayme edited, a long open window, and taken days alone", () => {
     expect(promoteLead({ ...base, wb: workbook(bottom("his own words")), prior: undated(), lead: lead({ dates: [{ start: "2027-01-02", end: null, kind: "hold", artist: null }] }) })).toBeNull();
     expect(promoteLead({ ...base, wb: workbook(bottom()), prior: undated(), lead: lead({ dates: [{ start: "2027-01-02", end: "2027-01-09", kind: "offered", artist: null }] }) })).toBeNull();
-    const menu = ["2027-01-02", "2027-01-04", "2027-01-06", "2027-01-08"].map((start) => ({ start, end: null, kind: "offered", artist: null }));
-    expect(promoteLead({ ...base, wb: workbook(bottom()), prior: undated(), lead: lead({ dates: menu }) })).toBeNull();
     const wb = workbook({ ...bottom(), 3: [46389, "Confirmed", "Lied Center"] });
     expect(promoteLead({ ...base, wb, prior: undated(), lead: lead({ dates: [{ start: "2027-01-02", end: null, kind: "offered", artist: null }] }) })).toBeNull();
     expect(wb.grid[13][2]).toBe("Musical Instrument Museum");
@@ -159,11 +157,14 @@ describe("promoteLead", () => {
 });
 
 describe("placeLead and a menu of dates", () => {
-  it("keeps a venue offering four or more alternative dates in 'no date yet'", () => {
+  it("fills only the free days with a venue's alternative dates, marked as options (Falcon Bowl, Nov 14)", () => {
     const menu = ["2027-01-02", "2027-01-04", "2027-01-06", "2027-01-08"].map((start) => ({ start, end: null, kind: "offered", artist: null }));
-    const r = placeLead({ artist: "Rakish", bookings: [], today: "2026-11-06", wb: workbook(), lead: lead({ dates: menu }) });
-    expect(r.placement.kind).toBe("undated");
-    expect(r.writes).toHaveLength(1);
+    const wb = workbook({ 5: [46391, "Hold", "Grand Theater"] }); // Jan 4 taken
+    const r = placeLead({ artist: "Rakish", bookings: [], today: "2026-11-06", wb, lead: lead({ dates: menu }) });
+    expect(r.placement.kind).toBe("dated");
+    expect(r.writes.map((w) => w.range)).toEqual(["'Rakish 2027 Workbook'!B3:G3", "'Rakish 2027 Workbook'!B7:G7", "'Rakish 2027 Workbook'!B9:G9"]);
+    expect(String(r.writes[0].values[0][5])).toMatch(/one of 4 dates offered/);
+    expect(wb.grid[4][2]).toBe("Grand Theater");
   });
 });
 

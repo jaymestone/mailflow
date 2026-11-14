@@ -329,3 +329,28 @@ export function tableColumns(wb: Workbook, entries: TableEntry[]): Write {
   for (let row = 2; row <= last; row++) values.push([(on.get(row) ?? []).join(" · "), (offMap.get(row) ?? []).join(" · ")]);
   return { range: `'${wb.tab}'!K1:L${last}`, values };
 }
+
+/** Moves a lead this pipeline put on day rows once the thread settles on a
+ * different firm date (Kennedy Center, Nov 14 2026: Yasmin asked about Apr
+ * 1-3, settled on Apr 15, and the Apr 1-2 rows stayed until Jayme cleared
+ * them by hand). Only when every firm date (hold / offered / confirmed,
+ * three days or fewer) is off the old rows, and only if Jayme hasn't
+ * touched them. */
+export function relocateLead(opts: { artist: string; wb: Workbook; prior: Extract<Placement, { row: number }>; lead: Lead; bookings: Booking[]; today: string }): { placement: Placement; writes: Write[] } | null {
+  const { artist, wb, prior, lead, bookings, today } = opts;
+  if (prior.kind !== "dated") return null;
+  const firm = lead.dates.filter((d) => (!d.artist || d.artist === artist) && ["hold", "offered", "confirmed"].includes(d.kind));
+  const days = firm.flatMap((d) => eachDay(d.start, d.end));
+  if (!days.length || days.length > 3) return null;
+  const oldIsos = [...wb.rowOfIso].filter(([, row]) => sameVenue(cell(wb, row, 2), prior.venue)).map(([iso]) => iso);
+  if (!oldIsos.length || days.some((d) => oldIsos.includes(d))) return null;
+  const snapshot = wb.grid.map((r) => (r ? [...r] : r));
+  const cleared = withdrawLead(wb, prior);
+  if (!cleared.length) return null;
+  const res = placeLead({ artist, wb, lead: { ...lead, dates: firm }, bookings, today });
+  if (res.placement.kind !== "dated") {
+    wb.grid.splice(0, wb.grid.length, ...snapshot);
+    return null;
+  }
+  return { placement: res.placement, writes: [...cleared, ...res.writes] };
+}

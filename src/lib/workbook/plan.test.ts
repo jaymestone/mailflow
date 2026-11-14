@@ -213,3 +213,21 @@ describe("tableColumns", () => {
     expect(w.values[1]).toEqual(["", ""]);
   });
 });
+
+describe("relocateLead", () => {
+  it("moves an untouched dated lead to the date the venue settled on", async () => {
+    const { relocateLead } = await import("./plan");
+    const note = "Yasmin asked Apr 1-3.";
+    const wb = workbook({ 3: [46389, "Inquiry", "Kennedy Center", "", "", "", note], 4: [46390, "Inquiry", "Kennedy Center"] }); // Jan 2-3
+    const prior = { artist: "Rakish", tab: wb.tab, row: 3, venue: "Kennedy Center", note, kind: "dated" as const };
+    const res = relocateLead({ artist: "Rakish", wb, prior, lead: lead({ venue: "Kennedy Center", note: "Settled", nextStep: null, dates: [{ start: "2027-01-08", end: null, kind: "offered" }] }), bookings: [], today: "2026-11-14" });
+    expect(res?.placement.kind).toBe("dated");
+    expect(res!.writes.map((w) => w.range)).toEqual(["'Rakish 2027 Workbook'!B3:G3", "'Rakish 2027 Workbook'!B4:G4", "'Rakish 2027 Workbook'!B9:G9"]);
+  });
+  it("leaves rows Jayme edited alone", async () => {
+    const { relocateLead } = await import("./plan");
+    const wb = workbook({ 3: [46389, "Hold", "Kennedy Center", "", "", "", "Jayme's own note"] });
+    const prior = { artist: "Rakish", tab: wb.tab, row: 3, venue: "Kennedy Center", note: "pipeline note", kind: "dated" as const };
+    expect(relocateLead({ artist: "Rakish", wb, prior, lead: lead({ venue: "Kennedy Center", dates: [{ start: "2027-01-08", end: null, kind: "hold" }] }), bookings: [], today: "2026-11-14" })).toBeNull();
+  });
+});

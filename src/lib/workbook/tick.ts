@@ -2,6 +2,7 @@ import { findPuzzles, isClosed, ROUTING_CLOSED_KEY, ROUTING_SNAPSHOT_KEY, type C
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { batchClear, batchGet, batchUpdate, batchUpdateValues, getSheetTitles, sheetsConfigured, type Cell } from "./sheets";
 import { MASTER_SPREADSHEET_ID as SHEET, SHEET_ROSTER, workbookTab } from "./roster";
+import { dateOptions, optionsBlock, OPTIONS_HEADER, type OptionItem } from "./options";
 import {
   eachDay,
   fmtDay,
@@ -9,6 +10,7 @@ import {
   placeLead,
   promoteLead,
   withdrawLead,
+  relocateLead,
   isPlaceholder,
   tableColumns,
   type TableEntry,
@@ -293,6 +295,13 @@ export async function runWorkbookTick(supabase: SupabaseClient, opts: { now?: Da
       const prior = placements.find((p) => p.artist === artist);
       if (prior) {
         if ("row" in prior && prior.tab === wb.tab) {
+          const moved = relocateLead({ artist, wb, prior, lead: v.lead, bookings, today });
+          if (moved) {
+            placements.splice(placements.indexOf(prior), 1, moved.placement);
+            writes.push(...moved.writes);
+            result.placed++;
+            continue;
+          }
           const promoted = promoteLead({ artist, wb, prior, lead: v.lead, bookings, today });
           if (promoted) {
             placements.splice(placements.indexOf(prior), 1, promoted.placement);
@@ -318,8 +327,22 @@ export async function runWorkbookTick(supabase: SupabaseClient, opts: { now?: Da
     v.c.sheet_placements = placements;
   }
   // ---- 2b. On / off the table: every venue talking about each day ---------
+  const optionValues: Cell[][] = [];
+  const optionKinds: ("artist" | "date" | "live" | "off")[] = [];
+  const optionArtists: string[] = [];
   for (const [artist, wb] of books) {
     const entries: TableEntry[] = [];
+    const items: OptionItem[] = [];
+    for (const v of view) {
+      for (const d of v.lead.dates) {
+        if (d.artist ? d.artist !== artist : !v.lead.artists.includes(artist)) continue;
+        if (d.kind === "confirmed" && bookings.some((b) => b.artist === artist && b.range && b.range[0] <= (d.end ?? d.start) && d.start <= b.range[1] && !sameVenue(b.venue, v.lead.venue))) continue;
+        items.push({ venue: v.lead.venue, city: v.lead.city, state: v.lead.state, fee: v.lead.artists.length > 1 ? null : v.lead.fee, kind: d.kind, start: d.start, end: d.end, note: v.lead.note, next: v.lead.nextStep ?? "", last: (v.c.last_message_at ?? "").slice(0, 10), link: v.link, off: v.lead.interest === "talk_later" ? "not now" : false });
+      }
+    }
+    for (const c of all) if (c.sheet_interest === "declined" && c.venue) for (const d of c.sheet_dates ?? []) if (d.artist ? d.artist === artist : (c.sheet_artists ?? []).includes(artist)) items.push({ venue: c.venue, city: "", state: "", fee: null, kind: "declined", start: d.start, end: d.end, note: c.sheet_note ?? "", next: "", last: (c.last_message_at ?? "").slice(0, 10), link: "", off: "passed" });
+    const block = optionsBlock(artist, dateOptions({ artist, wb, items, bookings, today }));
+    if (block.values.length) { optionArtists.push(artist); optionValues.push(...block.values); optionKinds.push(...block.kinds); }
     const add = (venue: string, lead: Pick<Lead, "artists" | "dates" | "fee">, off: TableEntry["off"]) => {
       for (const d of lead.dates) {
         if (d.artist ? d.artist !== artist : !lead.artists.includes(artist)) continue;
@@ -334,6 +357,7 @@ export async function runWorkbookTick(supabase: SupabaseClient, opts: { now?: Da
     writes.push(tableColumns(wb, entries));
   }
   if (writes.length) await batchUpdateValues(SHEET, writes, "RAW");
+  await writeDateOptions(sheetIdOf.get("Date Options"), optionValues, optionKinds, optionArtists);
   for (const v of view) {
     const changed = !v.c.sheet_synced_at || (v.c.summarized_at && v.c.summarized_at > v.c.sheet_synced_at);
     if (!changed) continue;
@@ -705,4 +729,34 @@ export async function runWorkbookTick(supabase: SupabaseClient, opts: { now?: Da
   result.puzzles = snapshot.puzzles.length;
 
   return result;
+}
+
+/** The Date Options tab: rewritten in full, then formatted -- artist bars in
+ * each artist's colour, date lines bold on grey, passes greyed out. Skipped
+ * if the tab doesn't exist (scripts/tmp/create_date_options_tab creates it). */
+async function writeDateOptions(sheetId: number | undefined, values: Cell[][], kinds: ("artist" | "date" | "live" | "off")[], artists: string[]) {
+  if (sheetId === undefined) return;
+  await batchClear(SHEET, ["'Date Options'!A1:I5000"]);
+  await batchUpdateValues(SHEET, [{ range: "'Date Options'!A1", values: [OPTIONS_HEADER, ...values] }], "USER_ENTERED");
+  const reqs: unknown[] = [
+    { unmergeCells: { range: { sheetId, startRowIndex: 0, endRowIndex: 5000 } } },
+    { repeatCell: { range: { sheetId, startRowIndex: 1, endRowIndex: 5000, startColumnIndex: 0, endColumnIndex: 9 }, cell: { userEnteredFormat: { backgroundColor: { red: 1, green: 1, blue: 1 }, textFormat: { bold: false, foregroundColor: { red: 0, green: 0, blue: 0 }, fontSize: 10 }, wrapStrategy: "CLIP" } }, fields: "userEnteredFormat(backgroundColor,textFormat,wrapStrategy)" } },
+    { repeatCell: { range: { sheetId, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 0, endColumnIndex: 9 }, cell: { userEnteredFormat: { backgroundColor: { red: 0.13, green: 0.2, blue: 0.33 }, textFormat: { bold: true, foregroundColor: { red: 1, green: 1, blue: 1 } } } }, fields: "userEnteredFormat(backgroundColor,textFormat)" } },
+    { updateSheetProperties: { properties: { sheetId, gridProperties: { frozenRowCount: 1 } }, fields: "gridProperties.frozenRowCount" } },
+  ];
+  let a = 0;
+  kinds.forEach((k, i) => {
+    const row = i + 1;
+    if (k === "artist") {
+      const color = ARTIST_COLOR[artists[a++]] ?? { red: 0.9, green: 0.9, blue: 0.9 };
+      reqs.push({ mergeCells: { range: { sheetId, startRowIndex: row, endRowIndex: row + 1, startColumnIndex: 0, endColumnIndex: 9 }, mergeType: "MERGE_ALL" } });
+      reqs.push({ repeatCell: { range: { sheetId, startRowIndex: row, endRowIndex: row + 1, startColumnIndex: 0, endColumnIndex: 9 }, cell: { userEnteredFormat: { backgroundColor: deeper(color), textFormat: { bold: true, fontSize: 12 } } }, fields: "userEnteredFormat(backgroundColor,textFormat)" } });
+    } else if (k === "date") {
+      reqs.push({ mergeCells: { range: { sheetId, startRowIndex: row, endRowIndex: row + 1, startColumnIndex: 0, endColumnIndex: 9 }, mergeType: "MERGE_ALL" } });
+      reqs.push({ repeatCell: { range: { sheetId, startRowIndex: row, endRowIndex: row + 1, startColumnIndex: 0, endColumnIndex: 9 }, cell: { userEnteredFormat: { backgroundColor: { red: 0.93, green: 0.93, blue: 0.93 }, textFormat: { bold: true } } }, fields: "userEnteredFormat(backgroundColor,textFormat)" } });
+    } else if (k === "off") {
+      reqs.push({ repeatCell: { range: { sheetId, startRowIndex: row, endRowIndex: row + 1, startColumnIndex: 0, endColumnIndex: 9 }, cell: { userEnteredFormat: { textFormat: { foregroundColor: { red: 0.6, green: 0.6, blue: 0.6 }, strikethrough: false } } }, fields: "userEnteredFormat.textFormat.foregroundColor" } });
+    }
+  });
+  await batchUpdate(SHEET, reqs);
 }

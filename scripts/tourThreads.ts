@@ -162,6 +162,13 @@ async function cmdDraft(file: string) {
     // "to" overrides the recipient, e.g. the colleague someone introduced; the
     // introducer then lands in Cc with everyone else from the venue side.
     const to = (it.to || addrs(lastTheirs!.from)[0]).toLowerCase();
+    // Name check (Nov 14 2026): "Hi there" went to people whose name was right
+    // in their signature or From line. Flag it so the greeting gets fixed.
+    if (/^(?:\s*▶?\s*DELETE THIS LINE TO APPROVE[^\n]*\n+)?\s*(Hi|Hey|Hello) (there|Folks),/i.test(it.body) && lastTheirs) {
+      const display = (lastTheirs.from.match(/^\s*"?([^"<]+?)"?\s*</) || [])[1] || "";
+      const person = display && !/booking|events?|info|team|office|festival|center|centre|theat|music|arts?\b|hall|society|series|presents|foundation|productions|council|club|museum|library|admin|program/i.test(display) && /^[A-Z][a-z'’.-]+(\s+[A-Z][\w'’.-]+)+$/.test(display.trim());
+      if (person) console.log(`NAME CHECK ${conversation.venue}: greets "there" but the venue's last email is from ${display.trim()}`);
+    }
     const played = it.allowPlayed ? [] : await playedConflicts(it.body, to, conversation.venue);
     if (played.length) { console.log(`BLOCKED ${conversation.venue}: names an artist who played/is booked there: ${played.join("; ")} (set "allowPlayed": true if intended)`); continue; }
     const cc = it.cc ?? [...new Set(msgs.flatMap((x) => [...addrs(x.from), ...addrs(x.to), ...addrs(x.cc)]))]

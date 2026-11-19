@@ -123,6 +123,27 @@ const cell = (wb: Workbook, row: number, col: number) => String(wb.grid[row - 1]
 export const isPlaceholder = (v: unknown) => /^(fill( in)?|open|tbd|\?+)$/i.test(String(v ?? "").trim());
 const venueAt = (wb: Workbook, row: number) => (isPlaceholder(cell(wb, row, 2)) ? "" : cell(wb, row, 2));
 
+/** A day the band can't take (Jayme, Nov 19 2026: interest and offers kept
+ * landing on Little Mercies' Apr 8 and Apr 10, which were already their own
+ * shows, and the own show disappeared under them). Blocked when the artist
+ * marked the day in H ("Booked (own show)" / "Unavailable"), or the row is a
+ * Confirmed booking. Returns how to name it, or "". */
+export function blockedDay(wb: Workbook, row: number): string {
+  const avail = cell(wb, row, 7);
+  if (/booked|unavailable/i.test(avail)) {
+    if (/unavailable/i.test(avail)) return "artist unavailable";
+    const what = [cell(wb, row, 9), cell(wb, row, 8)].filter(Boolean).join(", ");
+    return `own show${what ? `: ${what}` : ""}`;
+  }
+  if (/^confirmed$/i.test(cell(wb, row, 1)) && venueAt(wb, row)) return `booked: ${venueAt(wb, row)}`;
+  return "";
+}
+/** What already occupies a day: another venue, or a blocked day. */
+const takenAt = (wb: Workbook, row: number) => {
+  const b = blockedDay(wb, row);
+  return b ? b : venueAt(wb, row);
+};
+
 /** The first row of the "no date yet" section that is free. */
 function nextBottomRow(wb: Workbook): number {
   const header = wb.grid.findIndex((r) => /^Target Window$/i.test(String(r[0] ?? "").trim()));
@@ -203,9 +224,9 @@ export function placeLead(opts: { artist: string; wb: Workbook; lead: Lead; book
   for (const d of mine) {
     const days = eachDay(d.start, d.end).filter((iso) => wb.rowOfIso.has(iso));
     if (!days.length) continue;
-    const busy = days.filter((iso) => venueAt(wb, wb.rowOfIso.get(iso)!));
+    const busy = days.filter((iso) => takenAt(wb, wb.rowOfIso.get(iso)!));
     if (busy.length) {
-      taken.push(...busy.map((iso) => `${fmtDay(iso)} (${venueAt(wb, wb.rowOfIso.get(iso)!)})`));
+      taken.push(...busy.map((iso) => `${fmtDay(iso)} (${takenAt(wb, wb.rowOfIso.get(iso)!)})`));
       continue;
     }
     days.forEach((iso, i) => {
@@ -325,6 +346,8 @@ export function tableColumns(wb: Workbook, entries: TableEntry[]): Write {
       const row = wb.rowOfIso.get(iso);
       if (!row) continue;
       if (!off && sameVenue(cell(wb, row, 2), e.venue)) continue;
+      // A booked day isn't on the table for anyone else (Jayme, Nov 19).
+      if (!off && blockedDay(wb, row)) continue;
       const label = off ? `${e.venue} (${off})` : `${e.venue} (${[KIND_LABEL[e.kind] ?? "asked", money(e.fee)].filter(Boolean).join(", ")})`;
       const m = off ? offMap : on;
       const list = m.get(row) ?? [];
@@ -360,4 +383,50 @@ export function relocateLead(opts: { artist: string; wb: Workbook; prior: Extrac
     return null;
   }
   return { placement: res.placement, writes: [...cleared, ...res.writes] };
+}
+
+/** Takes an earlier dated placement back off any day that has since become
+ * blocked -- the artist marked an own show or unavailability in H (Jayme,
+ * Nov 19 2026: COCA and Folkmoot sat on Little Mercies' Apr 8 and Apr 10,
+ * both own shows). Only rows this pipeline wrote and Jayme hasn't touched:
+ * the first row's note must be exactly what was written, later rows carry
+ * no note. If the venue keeps other days, only the blocked ones are cleared;
+ * if none are left, the lead goes to "no date yet" naming the clash. */
+export function evictBlocked(opts: { artist: string; wb: Workbook; prior: Extract<Placement, { row: number }>; lead: Lead; bookings: Booking[]; today: string }): { placement: Placement; writes: Write[] } | null {
+  const { artist, wb, prior, lead, bookings, today } = opts;
+  if (prior.kind !== "dated") return null;
+  const mineRows = [...wb.rowOfIso].filter(([, row]) => sameVenue(cell(wb, row, 2), prior.venue));
+  const untouched = (row: number) => /^(Inquiry|Hold)$/.test(cell(wb, row, 1)) && (row === prior.row ? cell(wb, row, 6) === prior.note.trim() : !cell(wb, row, 6));
+  const blocked = mineRows.filter(([, row]) => /booked|unavailable/i.test(cell(wb, row, 7)) && untouched(row));
+  if (!blocked.length) return null;
+  const clashes = blocked.map(([iso, row]) => `${fmtDay(iso)} (${blockedDay(wb, row)})`);
+  const writes: Write[] = blocked.map(([, row]) => {
+    const r = wb.grid[row - 1] ?? [];
+    for (let c = 1; c <= 6; c++) r[c] = "";
+    return { range: `'${wb.tab}'!B${row}:G${row}`, values: [["", "", "", "", "", ""]] };
+  });
+  const left = mineRows.filter(([iso]) => !blocked.some(([b]) => b === iso));
+  if (left.length) {
+    const firstRow = left[0][1];
+    let note = prior.note;
+    if (blocked.some(([, row]) => row === prior.row)) {
+      // The note lived on a cleared row: carry it to the first remaining one, if that's empty.
+      if (!cell(wb, firstRow, 6)) {
+        wb.grid[firstRow - 1][6] = note;
+        writes.push({ range: `'${wb.tab}'!G${firstRow}`, values: [[note]] });
+      } else note = cell(wb, firstRow, 6);
+    }
+    return { placement: { ...prior, row: firstRow, note }, writes };
+  }
+  // Nothing left on the calendar: "no date yet", with the clash named.
+  const res = placeLead({ artist, wb, lead, bookings, today });
+  if (res.placement.kind === "undated" && !/already taken/.test(res.placement.note)) {
+    // placeLead found no clash (its dates moved on); still say why it's here.
+    const row = res.placement.row;
+    const note = `${res.placement.note} Asked for ${clashes.join(", ")} -- already taken.`;
+    wb.grid[row - 1][6] = note;
+    res.writes[0].values[0][6] = note;
+    res.placement = { ...res.placement, note };
+  }
+  return { placement: res.placement, writes: [...writes, ...res.writes] };
 }

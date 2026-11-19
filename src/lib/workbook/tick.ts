@@ -11,6 +11,7 @@ import {
   promoteLead,
   withdrawLead,
   relocateLead,
+  evictBlocked,
   isPlaceholder,
   tableColumns,
   type TableEntry,
@@ -284,6 +285,27 @@ export async function runWorkbookTick(supabase: SupabaseClient, opts: { now?: Da
     });
     const { error } = await supabase.from("conversations").update({ sheet_placements: placements, sheet_synced_at: now.toISOString() }).eq("id", c.id);
     if (error) result.errors.push(`${c.thread_key.slice(0, 40)}: ${error.message}`);
+  }
+  // Leads sitting on a day the band can't take (an own show the artist marked,
+  // Jayme Nov 19) move off it, every pass -- the artist can mark a day long
+  // after the lead was placed.
+  for (const v of view) {
+    const placements = [...(v.c.sheet_placements ?? [])];
+    let moved = false;
+    for (const prior of placements) {
+      const wb = books.get(prior.artist);
+      if (!wb || !("row" in prior) || prior.tab !== wb.tab) continue;
+      const res = evictBlocked({ artist: prior.artist, wb, prior, lead: v.lead, bookings, today });
+      if (!res) continue;
+      placements.splice(placements.indexOf(prior), 1, res.placement);
+      writes.push(...res.writes);
+      result.placed++;
+      moved = true;
+    }
+    if (!moved) continue;
+    v.c.sheet_placements = placements;
+    const { error } = await supabase.from("conversations").update({ sheet_placements: placements }).eq("id", v.c.id);
+    if (error) result.errors.push(`evict ${v.c.thread_key.slice(0, 40)}: ${error.message}`);
   }
   for (const v of view) {
     const changed = !v.c.sheet_synced_at || (v.c.summarized_at && v.c.summarized_at > v.c.sheet_synced_at);

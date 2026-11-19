@@ -232,3 +232,56 @@ describe("relocateLead", () => {
     expect(relocateLead({ artist: "Rakish", wb, prior, lead: lead({ venue: "Kennedy Center", dates: [{ start: "2027-01-08", end: null, kind: "hold" }] }), bookings: [], today: "2026-11-14" })).toBeNull();
   });
 });
+
+// Jayme, Nov 19 2026: "Stop putting in interest and offers in the workbook on
+// dates where the band is already booked or has their own show" (Little
+// Mercies Apr 8 and Apr 10, where COCA and Folkmoot hid the own shows).
+describe("days the band is already booked", () => {
+  const own = (serial: number) => [serial, "", "", "", "", "", "", "Booked (own show)", "Elkton FL", "Gamble Rogers Fest"];
+  it("never takes a lead onto an own-show day; the lead goes to 'no date yet' naming the show", () => {
+    const wb = workbook({ 3: own(46389) }); // Jan 2
+    const res = placeLead({ artist: "Rakish", wb, lead: lead({ dates: [{ start: "2027-01-02", end: null, kind: "offered" }] }), bookings: [], today: "2026-11-19" });
+    expect(res.placement.kind).toBe("undated");
+    expect(res.placement.kind === "undated" && res.placement.note).toMatch(/own show: Gamble Rogers Fest, Elkton FL/);
+  });
+  it("skips a Confirmed or Unavailable day in a menu of dates, filling the free ones", () => {
+    const wb = workbook({ 3: [46389, "Confirmed", "Barre Opera House"], 4: [46390, "", "", "", "", "", "", "Unavailable"] }); // Jan 2-3
+    const dates = ["2027-01-02", "2027-01-03", "2027-01-05", "2027-01-06"].map((start) => ({ start, end: null, kind: "offered" }));
+    const res = placeLead({ artist: "Rakish", wb, lead: lead({ dates }), bookings: [], today: "2026-11-19" });
+    expect(res.writes.map((w) => w.range)).toEqual(["'Rakish 2027 Workbook'!B6:G6", "'Rakish 2027 Workbook'!B7:G7"]);
+  });
+  it("leaves booked days out of 'On the table'", () => {
+    const wb = workbook({ 3: own(46389) });
+    const w = tableColumns(wb, [{ venue: "Folkmoot", start: "2027-01-02", end: "2027-01-03", kind: "offered", fee: 600, off: false as const }]);
+    expect(w.values[2]).toEqual(["", ""]);
+    expect(w.values[3]).toEqual(["Folkmoot (open for them, $600)", ""]);
+  });
+  it("moves an earlier placement off a day the artist later marked, keeping its other days (COCA)", async () => {
+    const { evictBlocked } = await import("./plan");
+    const note = "COCA menu";
+    const wb = workbook({ 2: [46388, "Inquiry", "COCA", "", "", "", note], 3: [...own(46389)] });
+    wb.grid[2][1] = "Inquiry"; wb.grid[2][2] = "COCA";
+    const prior = { artist: "Rakish", tab: wb.tab, row: 2, venue: "COCA", note, kind: "dated" as const };
+    const res = evictBlocked({ artist: "Rakish", wb, prior, lead: lead({ venue: "COCA" }), bookings: [], today: "2026-11-19" });
+    expect(res!.writes.map((w) => w.range)).toEqual(["'Rakish 2027 Workbook'!B3:G3"]);
+    expect(res!.placement).toMatchObject({ row: 2, kind: "dated" });
+  });
+  it("sends a lead with no day left to 'no date yet' (Folkmoot)", async () => {
+    const { evictBlocked } = await import("./plan");
+    const note = "Folkmoot offered";
+    const wb = workbook({ 3: [...own(46389)] });
+    wb.grid[2][1] = "Inquiry"; wb.grid[2][2] = "Folkmoot"; wb.grid[2][6] = note;
+    const prior = { artist: "Rakish", tab: wb.tab, row: 3, venue: "Folkmoot", note, kind: "dated" as const };
+    const res = evictBlocked({ artist: "Rakish", wb, prior, lead: lead({ venue: "Folkmoot", note, nextStep: null, dates: [{ start: "2027-01-02", end: null, kind: "offered" }] }), bookings: [], today: "2026-11-19" });
+    expect(res!.placement.kind).toBe("undated");
+    expect(res!.writes[0].range).toBe("'Rakish 2027 Workbook'!B3:G3");
+    expect("note" in res!.placement && res!.placement.note).toMatch(/Gamble Rogers Fest/);
+  });
+  it("leaves a row Jayme put there himself", async () => {
+    const { evictBlocked } = await import("./plan");
+    const wb = workbook({ 3: [...own(46389)] });
+    wb.grid[2][1] = "Hold"; wb.grid[2][2] = "Folkmoot"; wb.grid[2][6] = "Jayme's note";
+    const prior = { artist: "Rakish", tab: wb.tab, row: 3, venue: "Folkmoot", note: "pipeline note", kind: "dated" as const };
+    expect(evictBlocked({ artist: "Rakish", wb, prior, lead: lead({ venue: "Folkmoot" }), bookings: [], today: "2026-11-19" })).toBeNull();
+  });
+});

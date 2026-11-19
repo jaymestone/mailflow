@@ -320,7 +320,7 @@ export function refreshNote(wb: Workbook, p: Extract<Placement, { row: number }>
 }
 
 /** One venue's date for one artist, for the "on / off the table" columns. */
-export type TableEntry = { venue: string; start: string; end: string | null; kind: string; fee: number | null; off: false | "passed" | "not now" };
+export type TableEntry = { venue: string; start: string; end: string | null; kind: string; fee: number | null; off: false | "passed" | "not now"; city?: string; state?: string; note?: string };
 
 const KIND_LABEL: Record<string, string> = { confirmed: "confirmed", hold: "hold", offered: "open for them", asked_about: "asked" };
 /** Longer than this is a season ("April 2027"), not a date to show per day.
@@ -477,4 +477,49 @@ export function tableDropdowns(w: Write, sheetId: number): { write: Write; reque
     });
   }
   return { write: { range: w.range, values }, requests };
+}
+
+/** One competing option for a day, as the Venue Name dropdown offers it. */
+export type DayChoice = { row: number; venue: string; status: string; city: string; state: string; fee: string; note: string };
+
+const STRENGTH: Record<string, number> = { confirmed: 4, hold: 3, offered: 2, asked_about: 1 };
+
+/** Every venue talking about a day other than the one in Venue Name, with
+ * what the row would show if Jayme picked it there (Jayme, Nov 19 2026: "have
+ * the dropdown ... change the contents of the city and state so everything
+ * matches and I can compare the offers one by one"). Strongest first:
+ * confirmed, hold, offer, ask; then the higher fee. Same limits as "On the
+ * table": passed or "not now" venues and booked days are left out. */
+export function dayChoices(wb: Workbook, entries: TableEntry[]): Map<number, DayChoice[]> {
+  const out = new Map<number, (DayChoice & { rank: number; feeN: number })[]>();
+  for (const e of entries) {
+    if (e.off || e.kind === "declined") continue;
+    const days = eachDay(e.start, e.end);
+    if (days.length > maxTableDays(e.kind)) continue;
+    for (const iso of days) {
+      const row = wb.rowOfIso.get(iso);
+      if (!row || blockedDay(wb, row) || sameVenue(cell(wb, row, 2), e.venue)) continue;
+      const list = out.get(row) ?? [];
+      if (list.some((x) => sameVenue(x.venue, e.venue))) continue;
+      list.push({ row, venue: e.venue, status: STATUS_FOR_KIND[e.kind] ?? "Inquiry", city: e.city ?? "", state: e.state ?? "", fee: money(e.fee), note: e.note ?? "", rank: STRENGTH[e.kind] ?? 0, feeN: e.fee ?? 0 });
+      out.set(row, list);
+    }
+  }
+  const sorted = new Map<number, DayChoice[]>();
+  for (const [row, list] of out) sorted.set(row, list.sort((a, b) => b.rank - a.rank || b.feeN - a.feeN).map(({ rank, feeN, ...c }) => c));
+  return sorted;
+}
+
+/** Puts a Venue Name dropdown (C) on each day with competing options: the
+ * venue showing now first, then the others. Typing any other venue still
+ * works (not strict). Every calendar cell in C is reset first. */
+export function venueDropdowns(wb: Workbook, choices: Map<number, DayChoice[]>, sheetId: number): unknown[] {
+  const last = Math.max(...wb.rowOfIso.values(), 1);
+  const requests: unknown[] = [{ setDataValidation: { range: { sheetId, startRowIndex: 1, endRowIndex: last, startColumnIndex: 2, endColumnIndex: 3 } } }];
+  for (const [row, list] of choices) {
+    const current = cell(wb, row, 2);
+    const items = [...new Set([current, ...list.map((c) => c.venue)].filter(Boolean))];
+    requests.push({ setDataValidation: { range: { sheetId, startRowIndex: row - 1, endRowIndex: row, startColumnIndex: 2, endColumnIndex: 3 }, rule: { condition: { type: "ONE_OF_LIST", values: items.map((v) => ({ userEnteredValue: v })) }, strict: false, showCustomUi: true } } });
+  }
+  return requests;
 }

@@ -322,3 +322,24 @@ describe("tableDropdowns", () => {
     expect((res.requests[1] as any).setDataValidation.rule.condition.values.map((v: any) => v.userEnteredValue)).toEqual(["2 options", "Surry Arts (asked)", "Folkmoot (open for them, $600)"]);
   });
 });
+
+describe("dayChoices / venueDropdowns", () => {
+  it("lists each competing venue with what the row would show, strongest first, in a Venue Name dropdown", async () => {
+    const { dayChoices, venueDropdowns } = await import("./plan");
+    const wb = workbook({ 3: [46389, "Inquiry", "Muddy Creek"], 4: [46390, "", "", "", "", "", "", "Booked (own show)", "Elkton FL", "Gamble Rogers Fest"] });
+    const choices = dayChoices(wb, [
+      { venue: "Surry Arts", start: "2027-01-02", end: null, kind: "asked_about", fee: null, off: false, city: "Mount Airy", state: "NC", note: "asked" },
+      { venue: "Folkmoot", start: "2027-01-02", end: "2027-01-03", kind: "offered", fee: 600, off: false, city: "Waynesville", state: "NC", note: "Robin offered" },
+      { venue: "Thomasville", start: "2027-01-02", end: null, kind: "offered", fee: 900, off: "passed" },
+      { venue: "Muddy Creek", start: "2027-01-02", end: null, kind: "hold", fee: null, off: false },
+    ]);
+    expect(choices.get(3)).toEqual([
+      { row: 3, venue: "Folkmoot", status: "Inquiry", city: "Waynesville", state: "NC", fee: "$600", note: "Robin offered" },
+      { row: 3, venue: "Surry Arts", status: "Inquiry", city: "Mount Airy", state: "NC", fee: "", note: "asked" },
+    ]);
+    expect(choices.has(4)).toBe(false); // own show
+    const reqs = venueDropdowns(wb, choices, 9) as any[];
+    expect(reqs[0].setDataValidation.rule).toBeUndefined();
+    expect(reqs[1].setDataValidation.rule.condition.values.map((v: any) => v.userEnteredValue)).toEqual(["Muddy Creek", "Folkmoot", "Surry Arts"]);
+  });
+});

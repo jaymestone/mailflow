@@ -14,6 +14,8 @@ import {
   evictBlocked,
   confirmStatus,
   tableDropdowns,
+  dayChoices,
+  venueDropdowns,
   isPlaceholder,
   tableColumns,
   type TableEntry,
@@ -354,6 +356,10 @@ export async function runWorkbookTick(supabase: SupabaseClient, opts: { now?: Da
   }
   // ---- 2b. On / off the table: every venue talking about each day ---------
   const validationRequests: unknown[] = [];
+  // Rows for the hidden Venue Choices tab the Apps Script reads (see docs/venue-choices.gs).
+  const choiceRows: Cell[][] = [];
+  const { data: ddSetting } = await supabase.from("app_settings").select("value").eq("key", "workbook_venue_dropdown").maybeSingle();
+  const venueDropdownsOn = ddSetting?.value === true || ddSetting?.value === "true";
   const optionValues: Cell[][] = [];
   const optionKinds: ("artist" | "date" | "live" | "off")[] = [];
   const optionArtists: string[] = [];
@@ -372,7 +378,7 @@ export async function runWorkbookTick(supabase: SupabaseClient, opts: { now?: Da
     for (const c of all) if (c.sheet_interest === "declined" && c.venue) for (const d of c.sheet_dates ?? []) if (d.artist ? d.artist === artist : (c.sheet_artists ?? []).includes(artist)) items.push({ venue: c.venue, city: "", state: "", fee: null, kind: "declined", start: d.start, end: d.end, note: c.sheet_note ?? "", next: "", last: (c.last_message_at ?? "").slice(0, 10), link: "", off: "passed" });
     const block = optionsBlock(artist, dateOptions({ artist, wb, items, bookings, today }));
     if (block.values.length) { optionArtists.push(artist); optionValues.push(...block.values); optionKinds.push(...block.kinds); }
-    const add = (venue: string, lead: Pick<Lead, "artists" | "dates" | "fee">, off: TableEntry["off"]) => {
+    const add = (venue: string, lead: Pick<Lead, "artists" | "dates" | "fee"> & Partial<Pick<Lead, "city" | "state" | "note" | "nextStep">>, off: TableEntry["off"]) => {
       const forArtist = (d: Lead["dates"][number]) => (d.artist ? d.artist === artist : lead.artists.includes(artist));
       // Once a venue confirms, its earlier offers are history (Marigny, Nov 19).
       const settled = lead.dates.some((d) => d.kind === "confirmed" && forArtist(d));
@@ -381,19 +387,29 @@ export async function runWorkbookTick(supabase: SupabaseClient, opts: { now?: Da
         if (settled && d.kind !== "confirmed") continue;
         // The pitch's anchor show read as this venue's date (see placeLead).
         if (d.kind === "confirmed" && bookings.some((b) => b.artist === artist && b.range && b.range[0] <= (d.end ?? d.start) && d.start <= b.range[1] && !sameVenue(b.venue, venue))) continue;
-        entries.push({ venue, start: d.start, end: d.end, kind: d.kind, fee: lead.artists.length > 1 ? null : lead.fee, off });
+        entries.push({ venue, start: d.start, end: d.end, kind: d.kind, fee: lead.artists.length > 1 ? null : lead.fee, off, city: lead.city, state: lead.state, note: `${lead.note ?? ""}${lead.nextStep ? ` Next: ${lead.nextStep}` : ""}`.trim() });
       }
     };
     // "Talk later" means not this time: the dates they discussed are off the table.
     for (const v of view) add(v.lead.venue, v.lead, v.lead.interest === "talk_later" ? "not now" : false);
     for (const c of all) if (c.sheet_interest === "declined" && c.venue) add(c.venue, { artists: c.sheet_artists ?? [], dates: c.sheet_dates ?? [], fee: null }, "passed");
     // K shows a count with every competing option in a dropdown (Nov 19).
+    // Once the Venue Choices script is installed, the dropdown moves to
+    // Venue Name (C) and picking a venue refills the row; K keeps the count.
     const dd = tableDropdowns(tableColumns(wb, entries), sheetIdOf.get(wb.tab) ?? -1);
     writes.push(dd.write);
-    if (sheetIdOf.has(wb.tab)) validationRequests.push(...dd.requests);
+    const sid = sheetIdOf.get(wb.tab);
+    if (sid != null) {
+      if (venueDropdownsOn) {
+        const choices = dayChoices(wb, entries);
+        validationRequests.push(dd.requests[0], ...venueDropdowns(wb, choices, sid));
+        for (const list of choices.values()) for (const c of list) choiceRows.push([wb.tab, c.row, c.venue, c.status, c.city, c.state, c.fee, c.note]);
+      } else validationRequests.push(...dd.requests);
+    }
   }
   if (writes.length) await batchUpdateValues(SHEET, writes, "RAW");
   await batchUpdate(SHEET, validationRequests);
+  if (venueDropdownsOn) await writeVenueChoices(sheetIdOf.get(CHOICES_TAB), choiceRows);
   await writeDateOptions(sheetIdOf.get("Date Options"), optionValues, optionKinds, optionArtists);
   for (const v of view) {
     const changed = !v.c.sheet_synced_at || (v.c.summarized_at && v.c.summarized_at > v.c.sheet_synced_at);
@@ -796,4 +812,16 @@ async function writeDateOptions(sheetId: number | undefined, values: Cell[][], k
     }
   });
   await batchUpdate(SHEET, reqs);
+}
+
+/** The hidden Venue Choices tab: one row per competing option per day, which
+ * the spreadsheet's onEdit script (docs/venue-choices.gs) copies into the
+ * row when Jayme picks that venue in Venue Name. Rewritten in full. */
+const CHOICES_TAB = "Venue Choices";
+async function writeVenueChoices(sheetId: number | undefined, rows: Cell[][]) {
+  if (sheetId == null) {
+    await batchUpdate(SHEET, [{ addSheet: { properties: { title: CHOICES_TAB, hidden: true } } }]);
+  }
+  await batchClear(SHEET, [`'${CHOICES_TAB}'!A1:H20000`]);
+  await batchUpdateValues(SHEET, [{ range: `'${CHOICES_TAB}'!A1`, values: [["Tab", "Row", "Venue", "Status", "City", "State", "Fee", "Notes"], ...rows] }], "RAW");
 }

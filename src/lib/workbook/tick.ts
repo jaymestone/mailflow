@@ -12,6 +12,9 @@ import {
   withdrawLead,
   relocateLead,
   evictBlocked,
+  joinNote,
+  nextPart,
+  carriedParts,
   confirmStatus,
   tableDropdowns,
   dayChoices,
@@ -337,7 +340,8 @@ export async function runWorkbookTick(supabase: SupabaseClient, opts: { now?: Da
             result.placed++;
             continue;
           }
-          const note = `${prior.note.match(/^Booked: [^)]*\)\. /)?.[0] ?? ""}${v.lead.note}${v.lead.nextStep ? ` Next: ${v.lead.nextStep}` : ""}`;
+          const kept = carriedParts(prior.note);
+          const note = joinNote(kept.booked, v.lead.note, ...kept.extra, nextPart(v.lead.nextStep));
           const w = refreshNote(wb, prior, note);
           if (w) {
             writes.push(w);
@@ -387,7 +391,7 @@ export async function runWorkbookTick(supabase: SupabaseClient, opts: { now?: Da
         if (settled && d.kind !== "confirmed") continue;
         // The pitch's anchor show read as this venue's date (see placeLead).
         if (d.kind === "confirmed" && bookings.some((b) => b.artist === artist && b.range && b.range[0] <= (d.end ?? d.start) && d.start <= b.range[1] && !sameVenue(b.venue, venue))) continue;
-        entries.push({ venue, start: d.start, end: d.end, kind: d.kind, fee: lead.artists.length > 1 ? null : lead.fee, off, city: lead.city, state: lead.state, note: `${lead.note ?? ""}${lead.nextStep ? ` Next: ${lead.nextStep}` : ""}`.trim() });
+        entries.push({ venue, start: d.start, end: d.end, kind: d.kind, fee: lead.artists.length > 1 ? null : lead.fee, off, city: lead.city, state: lead.state, note: joinNote(lead.note, nextPart(lead.nextStep)) });
       }
     };
     // "Talk later" means not this time: the dates they discussed are off the table.

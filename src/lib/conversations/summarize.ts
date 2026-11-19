@@ -56,6 +56,11 @@ export type ThreadSummary = {
   sheet_interest: string;
   sheet_routing_area: string | null;
   sheet_note: string;
+  /** Terse next step for the sheet ("answer tech Qs"), "" if none. */
+  sheet_next: string;
+  /** Where the venue is, only when the thread states it or the venue is unambiguous. */
+  venue_city: string | null;
+  venue_state: string | null;
   /** Durable facts about the venue itself, merged into the contact's notes (venueFacts.ts). */
   venue_facts: string[];
   /** Main-room capacity the venue stated (largest typical audience), else null. */
@@ -69,7 +74,7 @@ const SCHEMA = {
   additionalProperties: false,
   required: [
     "gist", "next_action", "fee_amount", "fee_note", "artist", "venue", "is_agreed", "is_small",
-    "sheet_artists", "sheet_dates", "sheet_window", "sheet_interest", "sheet_routing_area", "sheet_note", "venue_facts", "capacity", "capacity_min",
+    "sheet_artists", "sheet_dates", "sheet_window", "sheet_interest", "sheet_routing_area", "sheet_note", "sheet_next", "venue_city", "venue_state", "venue_facts", "capacity", "capacity_min",
   ],
   properties: {
     gist: {
@@ -171,7 +176,19 @@ const SCHEMA = {
     },
     sheet_note: {
       type: "string",
-      description: "One line, max 160 characters, for Jayme's booking sheet: who, what was said, any fee or capacity. Concrete. Only what the messages say.",
+      description: "Jayme's booking-sheet note: decision facts only, as terse fragments joined by ' · ', never a sentence, max 50 characters. Money first, and say whether it is an OFFER (the venue named the figure), a QUOTE (Jayme named it, not yet accepted), AGREED, or a range/budget. Then at most one deal-shaping fact (co-bill, door deal, workshop incl., small budget, needs tour). No people's names, no venue name, no dates, no artist names. Good: '$600 offer', '$3500 agreed', '$6000 quote', 'Budget $1.5–4k', '70/30 door · co-bill', 'No fee yet · small budget'. Empty string if nothing decision-relevant.",
+    },
+    sheet_next: {
+      type: "string",
+      description: "The single next step on this deal, 2–5 words, no names, no sentence. Good: 'answer tech Qs', 'send contract', 'await offer', 'pick dates', 'chase reply'. Empty string if nothing is pending.",
+    },
+    venue_city: {
+      type: ["string", "null"],
+      description: "City where the venue or event is, ONLY if a message states it (signature, address, 'here in Asheville') or the venue is a well-known institution whose city is unambiguous. Null otherwise. Never guess from an area code or the person's home.",
+    },
+    venue_state: {
+      type: ["string", "null"],
+      description: "Two-letter US state or Canadian province code for venue_city (e.g. 'CA', 'ON'), or the country name if outside US/Canada. Null when venue_city is null.",
     },
   },
 } as const;

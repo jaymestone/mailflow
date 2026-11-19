@@ -192,7 +192,7 @@ export async function runConversationSummarizeTick(
           sheet_interest: summary.sheet_interest ?? null,
           sheet_routing_area: summary.sheet_routing_area ?? null,
           sheet_note: summary.sheet_note ?? null,
-          sheet_next_step: summary.next_action || null,
+          sheet_next_step: summary.sheet_next || null,
           // Only fill the venue from the summary when the contact record
           // did not already supply one -- the catalogue name is the one
           // Jayme's lists and segments use, and letting a venue's own
@@ -227,14 +227,20 @@ export async function runConversationSummarizeTick(
       if (writeError) throw new Error(writeError.message);
 
       // Hard venue facts go on the contact's notes, below anything already there.
-      if (row.contact_id && (summary.venue_facts?.length || summary.capacity || summary.capacity_min)) {
-        const { data: contact } = await supabase.from("contacts").select("notes, capacity, capacity_min").eq("id", row.contact_id).maybeSingle();
+      if (row.contact_id && (summary.venue_facts?.length || summary.capacity || summary.capacity_min || summary.venue_city)) {
+        const { data: contact } = await supabase.from("contacts").select("notes, capacity, capacity_min, city, state").eq("id", row.contact_id).maybeSingle();
         const merged = mergeVenueFacts(contact?.notes, summary.venue_facts ?? []);
         const patch: Record<string, unknown> = {};
         if (contact && merged !== contact.notes) patch.notes = merged;
         // Capacity is its own filterable column; a stated figure fills it if empty.
         if (contact && summary.capacity && !contact.capacity) patch.capacity = summary.capacity;
         if (contact && summary.capacity_min && !contact.capacity_min && summary.capacity_min !== (contact.capacity ?? summary.capacity)) patch.capacity_min = summary.capacity_min;
+        // A location the thread states fills an empty city -- never overwrites one
+        // (Tosco Music, Nov 19: a dropdown option with no city told Jayme nothing).
+        if (contact && summary.venue_city && !contact.city) {
+          patch.city = summary.venue_city;
+          if (summary.venue_state && !contact.state) patch.state = summary.venue_state;
+        }
         if (Object.keys(patch).length) await supabase.from("contacts").update(patch).eq("id", row.contact_id);
       }
 

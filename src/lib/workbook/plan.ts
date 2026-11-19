@@ -199,11 +199,11 @@ export function placeLead(opts: { artist: string; wb: Workbook; lead: Lead; book
   );
   if (booked && booked.range && booked.range[1] >= today && !lead.window && lead.interest !== "talk_later")
     return { placement: { artist, kind: "booked", venue: lead.venue }, writes: [] };
-  const bookedNote = booked ? `Booked: ${booked.venue} ${booked.dateText} (Master). ` : "";
+  const bookedNote = booked ? `Booked: ${booked.venue} ${booked.dateText}` : "";
 
   // A fee on a thread about two artists is the thread's total, not this one's.
   const fee = lead.artists.length > 1 ? "" : money(lead.fee);
-  const note = `${bookedNote}${lead.note}${lead.nextStep ? ` Next: ${lead.nextStep}` : ""}`;
+  const note = joinNote(bookedNote, lead.note, nextPart(lead.nextStep));
   // A "confirmed" date that is really another venue's booking -- the pitch
   // said "booked at Blue Waters Aug 7-8" and the summariser read it as this
   // venue's date -- would block those days and push the lead to the bottom.
@@ -220,29 +220,29 @@ export function placeLead(opts: { artist: string; wb: Workbook; lead: Lead; book
   // yet", which hid Falcon Bowl's seven October dates from Jayme (Nov 14).
   // Now a menu fills only the days that are free, each marked as one option;
   // taken days keep their venue and the rest show in K and Date Options.
-  const menu = mine.length > 3 ? ` (one of ${mine.length} dates offered)` : "";
+  const menu = mine.length > 3 ? `1 of ${mine.length} dates` : "";
   for (const d of mine) {
     const days = eachDay(d.start, d.end).filter((iso) => wb.rowOfIso.has(iso));
     if (!days.length) continue;
     const busy = days.filter((iso) => takenAt(wb, wb.rowOfIso.get(iso)!));
     if (busy.length) {
-      taken.push(...busy.map((iso) => `${fmtDay(iso)} (${takenAt(wb, wb.rowOfIso.get(iso)!)})`));
+      taken.push(...busy.map((iso) => fmtDay(iso)));
       continue;
     }
     days.forEach((iso, i) => {
       const row = wb.rowOfIso.get(iso)!;
-      const values: Cell[] = [STATUS_FOR_KIND[d.kind] ?? "Inquiry", lead.venue, lead.city, lead.state, i === 0 && !firstRow ? fee : "", i === 0 && !firstRow ? note + menu : ""];
+      const values: Cell[] = [STATUS_FOR_KIND[d.kind] ?? "Inquiry", lead.venue, lead.city, lead.state, i === 0 && !firstRow ? fee : "", i === 0 && !firstRow ? joinNote(bookedNote, lead.note, menu, nextPart(lead.nextStep)) : ""];
       setRow(wb, row, 1, values);
       writes.push({ range: `'${wb.tab}'!B${row}:G${row}`, values: [values] });
       if (!firstRow) firstRow = row;
     });
   }
-  if (firstRow) return { placement: { artist, tab: wb.tab, row: firstRow, venue: lead.venue, note: note + menu, kind: "dated" }, writes };
+  if (firstRow) return { placement: { artist, tab: wb.tab, row: firstRow, venue: lead.venue, note: joinNote(bookedNote, lead.note, menu, nextPart(lead.nextStep)), kind: "dated" }, writes };
 
   const when = [...mine.map(fmtRange), lead.window ?? "", lead.interest === "if_routing" ? `If routing near ${lead.routingArea ?? lead.city}` : ""]
     .filter(Boolean)
     .join(" · ");
-  const fullNote = taken.length ? `${note.replace(/ Next: .*$/, "")} Asked for ${taken.join(", ")} -- already taken.${lead.nextStep ? ` Next: ${lead.nextStep}` : ""}` : note;
+  const fullNote = taken.length ? joinNote(bookedNote, lead.note, `taken: ${taken.join(", ")}`, nextPart(lead.nextStep)) : note;
   const row = nextBottomRow(wb);
   // Inquiry, not Prospective: the venue has expressed interest. Prospective
   // is Jayme's own word for a possibility he spotted, with no interest
@@ -283,6 +283,21 @@ export function promoteLead(opts: { artist: string; wb: Workbook; prior: Extract
   }
   res.writes.push({ range: `'${wb.tab}'!A${prior.row}:G${prior.row}`, values: [["", "", "", "", "", "", ""]] });
   return res;
+}
+
+/** Workbook notes are terse fragments joined by " · " (Jayme, Nov 19:
+ * "money first, offer or quote, maybe the next step ... I don't want to
+ * read a whole sentence"). */
+export const joinNote = (...parts: (string | null | undefined)[]): string => parts.map((p) => (p ?? "").trim()).filter(Boolean).join(" · ");
+export const nextPart = (step?: string | null): string => (step?.trim() ? `next: ${step.trim()}` : "");
+/** The parts of a note the pipeline added itself (a Master booking, a date
+ * menu, days already taken), carried over when the summary part refreshes. */
+export function carriedParts(note: string): { booked: string; extra: string[] } {
+  const parts = note.split(" · ");
+  return {
+    booked: parts.find((p) => p.startsWith("Booked: ")) ?? "",
+    extra: parts.filter((p) => /^1 of \d+ dates$|^taken: /.test(p)),
+  };
 }
 
 /** Takes a lead back off the sheet once the venue has passed (Lake City
@@ -425,10 +440,10 @@ export function evictBlocked(opts: { artist: string; wb: Workbook; prior: Extrac
   }
   // Nothing left on the calendar: "no date yet", with the clash named.
   const res = placeLead({ artist, wb, lead, bookings, today });
-  if (res.placement.kind === "undated" && !/already taken/.test(res.placement.note)) {
+  if (res.placement.kind === "undated" && !/taken: /.test(res.placement.note)) {
     // placeLead found no clash (its dates moved on); still say why it's here.
     const row = res.placement.row;
-    const note = `${res.placement.note} Asked for ${clashes.join(", ")} -- already taken.`;
+    const note = joinNote(res.placement.note, `taken: ${clashes.join(", ")}`);
     wb.grid[row - 1][6] = note;
     res.writes[0].values[0][6] = note;
     res.placement = { ...res.placement, note };

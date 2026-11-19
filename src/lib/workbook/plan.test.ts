@@ -75,7 +75,7 @@ describe("placeLead", () => {
     const { placement, writes } = placeLead({ ...base, wb, lead: lead({ dates: [{ start: "2027-01-02", end: "2027-01-03", kind: "offered", artist: null }] }) });
     expect(placement).toMatchObject({ kind: "dated", row: 3 });
     expect(writes.map((w) => w.range)).toEqual(["'Rakish 2027 Workbook'!B3:G3", "'Rakish 2027 Workbook'!B4:G4"]);
-    expect(writes[0].values[0]).toEqual(["Inquiry", "Musical Instrument Museum", "Phoenix", "AZ", "$5,900", "MIM wants Rakish. Next: Send hold"]);
+    expect(writes[0].values[0]).toEqual(["Inquiry", "Musical Instrument Museum", "Phoenix", "AZ", "$5,900", "MIM wants Rakish. · next: Send hold"]);
     expect(writes[1].values[0][4]).toBe("");
   });
 
@@ -83,7 +83,7 @@ describe("placeLead", () => {
     const wb = workbook({ 4: [46390, "Confirmed", "CPAC"] });
     const { placement, writes } = placeLead({ ...base, wb, lead: lead({ dates: [{ start: "2027-01-02", end: "2027-01-03", kind: "offered", artist: null }] }) });
     expect(placement).toMatchObject({ kind: "undated", row: 14 });
-    expect(String(writes[0].values[0][6])).toContain("already taken");
+    expect(String(writes[0].values[0][6])).toContain("taken: ");
   });
 
   it("marks an interested venue with no date as Inquiry, never Prospective", () => {
@@ -163,7 +163,7 @@ describe("placeLead and a menu of dates", () => {
     const r = placeLead({ artist: "Rakish", bookings: [], today: "2026-11-06", wb, lead: lead({ dates: menu }) });
     expect(r.placement.kind).toBe("dated");
     expect(r.writes.map((w) => w.range)).toEqual(["'Rakish 2027 Workbook'!B3:G3", "'Rakish 2027 Workbook'!B7:G7", "'Rakish 2027 Workbook'!B9:G9"]);
-    expect(String(r.writes[0].values[0][5])).toMatch(/one of 4 dates offered/);
+    expect(String(r.writes[0].values[0][5])).toMatch(/1 of 4 dates/);
     expect(wb.grid[4][2]).toBe("Grand Theater");
   });
 });
@@ -173,7 +173,7 @@ describe("placeLead and another venue's booking", () => {
     const bookings = readBookings([["Confirmed", "Rakish", "Jan 2, 2027", "Blue Waters", "", "", "Medical Lake, WA"]] as never);
     const r = placeLead({ artist: "Rakish", bookings, today: "2026-11-06", wb: workbook(), lead: lead({ dates: [{ start: "2027-01-02", end: null, kind: "confirmed", artist: null }] }) });
     expect(r.placement.kind).toBe("undated");
-    expect(r.writes[0].values[0][6]).not.toMatch(/already taken/);
+    expect(r.writes[0].values[0][6]).not.toMatch(/taken: /);
   });
 });
 
@@ -242,7 +242,7 @@ describe("days the band is already booked", () => {
     const wb = workbook({ 3: own(46389) }); // Jan 2
     const res = placeLead({ artist: "Rakish", wb, lead: lead({ dates: [{ start: "2027-01-02", end: null, kind: "offered" }] }), bookings: [], today: "2026-11-19" });
     expect(res.placement.kind).toBe("undated");
-    expect(res.placement.kind === "undated" && res.placement.note).toMatch(/own show: Gamble Rogers Fest, Elkton FL/);
+    expect(res.placement.kind === "undated" && res.placement.note).toMatch(/taken: /);
   });
   it("skips a Confirmed or Unavailable day in a menu of dates, filling the free ones", () => {
     const wb = workbook({ 3: [46389, "Confirmed", "Barre Opera House"], 4: [46390, "", "", "", "", "", "", "Unavailable"] }); // Jan 2-3
@@ -275,7 +275,7 @@ describe("days the band is already booked", () => {
     const res = evictBlocked({ artist: "Rakish", wb, prior, lead: lead({ venue: "Folkmoot", note, nextStep: null, dates: [{ start: "2027-01-02", end: null, kind: "offered" }] }), bookings: [], today: "2026-11-19" });
     expect(res!.placement.kind).toBe("undated");
     expect(res!.writes[0].range).toBe("'Rakish 2027 Workbook'!B3:G3");
-    expect("note" in res!.placement && res!.placement.note).toMatch(/Gamble Rogers Fest/);
+    expect("note" in res!.placement && res!.placement.note).toMatch(/taken: /);
   });
   it("leaves a row Jayme put there himself", async () => {
     const { evictBlocked } = await import("./plan");

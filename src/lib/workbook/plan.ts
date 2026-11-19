@@ -369,7 +369,12 @@ export function tableColumns(wb: Workbook, entries: TableEntry[]): Write {
 export function relocateLead(opts: { artist: string; wb: Workbook; prior: Extract<Placement, { row: number }>; lead: Lead; bookings: Booking[]; today: string }): { placement: Placement; writes: Write[] } | null {
   const { artist, wb, prior, lead, bookings, today } = opts;
   if (prior.kind !== "dated") return null;
-  const firm = lead.dates.filter((d) => (!d.artist || d.artist === artist) && ["hold", "offered", "confirmed"].includes(d.kind));
+  const ours = lead.dates.filter((d) => (!d.artist || d.artist === artist) && ["hold", "offered", "confirmed"].includes(d.kind));
+  // A confirmed date settles it: the offers that led there are history
+  // (Marigny Opera House, Nov 19 2026: confirmed Amanda Jan 24, and the
+  // Jan 20 offer kept the lead stuck as an Inquiry on Jan 20).
+  const confirmed = ours.filter((d) => d.kind === "confirmed");
+  const firm = confirmed.length ? confirmed : ours;
   const days = firm.flatMap((d) => eachDay(d.start, d.end));
   if (!days.length || days.length > 3) return null;
   const oldIsos = [...wb.rowOfIso].filter(([, row]) => sameVenue(cell(wb, row, 2), prior.venue)).map(([iso]) => iso);
@@ -429,4 +434,21 @@ export function evictBlocked(opts: { artist: string; wb: Workbook; prior: Extrac
     res.placement = { ...res.placement, note };
   }
   return { placement: res.placement, writes: [...writes, ...res.writes] };
+}
+
+/** Raises Inquiry / Hold to Confirmed on a lead's own rows once the thread
+ * confirms that day (Blue Strawberry, Nov 19 2026: Amanda confirmed Feb 24,
+ * still an Inquiry). Only rows this pipeline wrote and Jayme hasn't touched. */
+export function confirmStatus(opts: { artist: string; wb: Workbook; prior: Extract<Placement, { row: number }>; lead: Lead }): Write[] {
+  const { artist, wb, prior, lead } = opts;
+  if (prior.kind !== "dated" || !sameVenue(cell(wb, prior.row, 2), prior.venue) || cell(wb, prior.row, 6) !== prior.note.trim()) return [];
+  const days = lead.dates.filter((d) => d.kind === "confirmed" && (!d.artist || d.artist === artist)).flatMap((d) => eachDay(d.start, d.end));
+  const writes: Write[] = [];
+  for (const iso of days) {
+    const row = wb.rowOfIso.get(iso);
+    if (!row || !sameVenue(cell(wb, row, 2), prior.venue) || !/^(Inquiry|Hold)$/.test(cell(wb, row, 1))) continue;
+    wb.grid[row - 1][1] = "Confirmed";
+    writes.push({ range: `'${wb.tab}'!B${row}`, values: [["Confirmed"]] });
+  }
+  return writes;
 }

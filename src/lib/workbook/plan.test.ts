@@ -285,3 +285,28 @@ describe("days the band is already booked", () => {
     expect(evictBlocked({ artist: "Rakish", wb, prior, lead: lead({ venue: "Folkmoot" }), bookings: [], today: "2026-11-19" })).toBeNull();
   });
 });
+
+describe("relocateLead and a confirmed date", () => {
+  it("moves an Inquiry to the confirmed day even while the earlier offer is still in the thread (Marigny, Nov 19)", async () => {
+    const { relocateLead } = await import("./plan");
+    const note = "Marigny offered Jan 2.";
+    const wb = workbook({ 3: [46389, "Inquiry", "Marigny Opera House", "", "", "", note] }); // Jan 2
+    const prior = { artist: "Rakish", tab: wb.tab, row: 3, venue: "Marigny Opera House", note, kind: "dated" as const };
+    const dates = [{ start: "2027-01-06", end: null, kind: "confirmed" }, { start: "2027-01-02", end: null, kind: "offered" }];
+    const res = relocateLead({ artist: "Rakish", wb, prior, lead: lead({ venue: "Marigny Opera House", note: "Confirmed Jan 6", nextStep: null, dates }), bookings: [], today: "2026-11-19" });
+    expect(res!.writes.map((w) => w.range)).toEqual(["'Rakish 2027 Workbook'!B3:G3", "'Rakish 2027 Workbook'!B7:G7"]);
+    expect(res!.writes[1].values[0][0]).toBe("Confirmed");
+  });
+});
+
+describe("confirmStatus", () => {
+  it("raises an untouched Inquiry to Confirmed on the confirmed day (Blue Strawberry, Nov 19)", async () => {
+    const { confirmStatus } = await import("./plan");
+    const note = "Blue Strawberry confirmed Jan 2.";
+    const wb = workbook({ 3: [46389, "Inquiry", "Blue Strawberry", "", "", "", note] });
+    const prior = { artist: "Rakish", tab: wb.tab, row: 3, venue: "Blue Strawberry", note, kind: "dated" as const };
+    expect(confirmStatus({ artist: "Rakish", wb, prior, lead: lead({ venue: "Blue Strawberry", dates: [{ start: "2027-01-02", end: null, kind: "confirmed" }] }) })).toEqual([{ range: "'Rakish 2027 Workbook'!B3", values: [["Confirmed"]] }]);
+    const edited = workbook({ 3: [46389, "Inquiry", "Blue Strawberry", "", "", "", "Jayme's note"] });
+    expect(confirmStatus({ artist: "Rakish", wb: edited, prior, lead: lead({ venue: "Blue Strawberry", dates: [{ start: "2027-01-02", end: null, kind: "confirmed" }] }) })).toEqual([]);
+  });
+});

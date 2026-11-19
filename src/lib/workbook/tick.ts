@@ -12,6 +12,7 @@ import {
   withdrawLead,
   relocateLead,
   evictBlocked,
+  confirmStatus,
   isPlaceholder,
   tableColumns,
   type TableEntry,
@@ -295,6 +296,8 @@ export async function runWorkbookTick(supabase: SupabaseClient, opts: { now?: Da
     for (const prior of placements) {
       const wb = books.get(prior.artist);
       if (!wb || !("row" in prior) || prior.tab !== wb.tab) continue;
+      const up = confirmStatus({ artist: prior.artist, wb, prior, lead: v.lead });
+      writes.push(...up);
       const res = evictBlocked({ artist: prior.artist, wb, prior, lead: v.lead, bookings, today });
       if (!res) continue;
       placements.splice(placements.indexOf(prior), 1, res.placement);
@@ -356,8 +359,10 @@ export async function runWorkbookTick(supabase: SupabaseClient, opts: { now?: Da
     const entries: TableEntry[] = [];
     const items: OptionItem[] = [];
     for (const v of view) {
+      const settled = v.lead.dates.some((d) => d.kind === "confirmed" && (d.artist ? d.artist === artist : v.lead.artists.includes(artist)));
       for (const d of v.lead.dates) {
         if (d.artist ? d.artist !== artist : !v.lead.artists.includes(artist)) continue;
+        if (settled && d.kind !== "confirmed") continue;
         if (d.kind === "confirmed" && bookings.some((b) => b.artist === artist && b.range && b.range[0] <= (d.end ?? d.start) && d.start <= b.range[1] && !sameVenue(b.venue, v.lead.venue))) continue;
         items.push({ venue: v.lead.venue, city: v.lead.city, state: v.lead.state, fee: v.lead.artists.length > 1 ? null : v.lead.fee, kind: d.kind, start: d.start, end: d.end, note: v.lead.note, next: v.lead.nextStep ?? "", last: (v.c.last_message_at ?? "").slice(0, 10), link: v.link, off: v.lead.interest === "talk_later" ? "not now" : false });
       }
@@ -366,8 +371,12 @@ export async function runWorkbookTick(supabase: SupabaseClient, opts: { now?: Da
     const block = optionsBlock(artist, dateOptions({ artist, wb, items, bookings, today }));
     if (block.values.length) { optionArtists.push(artist); optionValues.push(...block.values); optionKinds.push(...block.kinds); }
     const add = (venue: string, lead: Pick<Lead, "artists" | "dates" | "fee">, off: TableEntry["off"]) => {
+      const forArtist = (d: Lead["dates"][number]) => (d.artist ? d.artist === artist : lead.artists.includes(artist));
+      // Once a venue confirms, its earlier offers are history (Marigny, Nov 19).
+      const settled = lead.dates.some((d) => d.kind === "confirmed" && forArtist(d));
       for (const d of lead.dates) {
-        if (d.artist ? d.artist !== artist : !lead.artists.includes(artist)) continue;
+        if (!forArtist(d)) continue;
+        if (settled && d.kind !== "confirmed") continue;
         // The pitch's anchor show read as this venue's date (see placeLead).
         if (d.kind === "confirmed" && bookings.some((b) => b.artist === artist && b.range && b.range[0] <= (d.end ?? d.start) && d.start <= b.range[1] && !sameVenue(b.venue, venue))) continue;
         entries.push({ venue, start: d.start, end: d.end, kind: d.kind, fee: lead.artists.length > 1 ? null : lead.fee, off });

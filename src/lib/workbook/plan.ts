@@ -538,3 +538,38 @@ export function venueDropdowns(wb: Workbook, choices: Map<number, DayChoice[]>, 
   }
   return requests;
 }
+
+/** Safety net for the Venue Name dropdown (Jayme, Nov 19: "I don't want to
+ * end up mismatching a venue to a city and not realizing"). If a day row's
+ * Venue Name says one venue but City/State are another option's for that
+ * same day, the switch only half-happened: the row is refilled with the
+ * named venue's own status, city, state, fee and note. Rows whose city
+ * matches no other option are left alone -- that may be his own correction. */
+export function repairSwitchedRows(wb: Workbook, entries: TableEntry[]): Write[] {
+  const writes: Write[] = [];
+  const onDay = new Map<number, TableEntry[]>();
+  for (const e of entries) {
+    if (e.off || e.kind === "declined") continue;
+    const days = eachDay(e.start, e.end);
+    if (days.length > maxTableDays(e.kind)) continue;
+    for (const iso of days) {
+      const row = wb.rowOfIso.get(iso);
+      if (row) onDay.set(row, [...(onDay.get(row) ?? []), e]);
+    }
+  }
+  const same = (a: string, b: string | undefined) => norm(a) === norm(b ?? "");
+  for (const [row, list] of onDay) {
+    if (!/^(Inquiry|Hold)$/.test(cell(wb, row, 1))) continue;
+    const shown = list.find((e) => sameVenue(cell(wb, row, 2), e.venue));
+    if (!shown?.city) continue;
+    const city = cell(wb, row, 3), state = cell(wb, row, 4);
+    if (same(city, shown.city) && same(state, shown.state)) continue;
+    const other = list.some((e) => e !== shown && !sameVenue(e.venue, shown.venue) && e.city && same(city, e.city) && same(state, e.state));
+    if (!other) continue;
+    const values: Cell[] = [STATUS_FOR_KIND[shown.kind] ?? "Inquiry", shown.city, shown.state ?? "", money(shown.fee), shown.note ?? ""];
+    const r = wb.grid[row - 1] ?? (wb.grid[row - 1] = []);
+    r[1] = values[0]; r[3] = values[1]; r[4] = values[2]; r[5] = values[3]; r[6] = values[4];
+    writes.push({ range: `'${wb.tab}'!B${row}`, values: [[values[0]]] }, { range: `'${wb.tab}'!D${row}:G${row}`, values: [values.slice(1)] });
+  }
+  return writes;
+}

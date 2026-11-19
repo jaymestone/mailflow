@@ -13,6 +13,7 @@ import {
   relocateLead,
   evictBlocked,
   joinNote,
+  repairSwitchedRows,
   nextPart,
   carriedParts,
   confirmStatus,
@@ -109,6 +110,7 @@ export type WorkbookTickResult = {
   assigned: number;
   placed: number;
   notesRefreshed: number;
+  switchRepairs?: number;
   withdrawn: number;
   leads: number;
   routingRows: number;
@@ -405,6 +407,9 @@ export async function runWorkbookTick(supabase: SupabaseClient, opts: { now?: Da
     const sid = sheetIdOf.get(wb.tab);
     if (sid != null) {
       if (venueDropdownsOn) {
+        const repaired = repairSwitchedRows(wb, entries);
+        writes.push(...repaired);
+        result.switchRepairs = (result.switchRepairs ?? 0) + repaired.length / 2;
         const choices = dayChoices(wb, entries);
         validationRequests.push(dd.requests[0], ...venueDropdowns(wb, choices, sid));
         for (const list of choices.values()) for (const c of list) choiceRows.push([wb.tab, c.row, c.venue, c.status, c.city, c.state, c.fee, c.note]);
@@ -413,7 +418,10 @@ export async function runWorkbookTick(supabase: SupabaseClient, opts: { now?: Da
   }
   if (writes.length) await batchUpdateValues(SHEET, writes, "RAW");
   await batchUpdate(SHEET, validationRequests);
-  if (venueDropdownsOn) await writeVenueChoices(sheetIdOf.get(CHOICES_TAB), choiceRows);
+  if (venueDropdownsOn) {
+    await writeVenueChoices(sheetIdOf.get(CHOICES_TAB), choiceRows);
+    await syncShowing(sheetIdOf.get(SHOWING_TAB), writes);
+  }
   await writeDateOptions(sheetIdOf.get("Date Options"), optionValues, optionKinds, optionArtists);
   for (const v of view) {
     const changed = !v.c.sheet_synced_at || (v.c.summarized_at && v.c.summarized_at > v.c.sheet_synced_at);
@@ -822,6 +830,31 @@ async function writeDateOptions(sheetId: number | undefined, values: Cell[][], k
  * the spreadsheet's onEdit script (docs/venue-choices.gs) copies into the
  * row when Jayme picks that venue in Venue Name. Rewritten in full. */
 const CHOICES_TAB = "Venue Choices";
+const SHOWING_TAB = "Venue Choices (showing)";
+
+/** The Venue Choices script remembers which venue each row is showing, so a
+ * switch saves the right venue's details. When this pass rewrites a row's
+ * Venue Name itself, that memory is updated to match -- otherwise the next
+ * switch would file this pass's details under the venue it replaced. */
+async function syncShowing(sheetId: number | undefined, writes: { range: string; values: Cell[][] }[]) {
+  const changed = new Map<string, string>();
+  for (const w of writes) {
+    const m = w.range.match(/^'(.+ \d{4} Workbook)'!B(\d+):G\2$/);
+    if (m) changed.set(`${m[1]}|${m[2]}`, String(w.values[0]?.[1] ?? "").trim());
+  }
+  if (!changed.size) return;
+  if (sheetId == null) await batchUpdate(SHEET, [{ addSheet: { properties: { title: SHOWING_TAB, hidden: true } } }]);
+  const [cur] = await batchGet(SHEET, [`'${SHOWING_TAB}'!A2:C20000`]);
+  const rows = new Map<string, Cell[]>();
+  for (const r of cur ?? []) if (r[0]) rows.set(`${r[0]}|${Number(r[1])}`, [r[0], Number(r[1]), r[2] ?? ""]);
+  for (const [k, venue] of changed) {
+    const [tab, row] = k.split("|");
+    if (venue) rows.set(k, [tab, Number(row), venue]);
+    else rows.delete(k);
+  }
+  await batchClear(SHEET, [`'${SHOWING_TAB}'!A1:C20000`]);
+  await batchUpdateValues(SHEET, [{ range: `'${SHOWING_TAB}'!A1`, values: [["Tab", "Row", "Venue"], ...rows.values()] }], "RAW");
+}
 async function writeVenueChoices(sheetId: number | undefined, rows: Cell[][]) {
   if (sheetId == null) {
     await batchUpdate(SHEET, [{ addSheet: { properties: { title: CHOICES_TAB, hidden: true } } }]);

@@ -343,3 +343,24 @@ describe("dayChoices / venueDropdowns", () => {
     expect(reqs[1].setDataValidation.rule.condition.values.map((v: any) => v.userEnteredValue)).toEqual(["Muddy Creek", "Folkmoot", "Surry Arts"]);
   });
 });
+
+describe("repairSwitchedRows", () => {
+  const entries = [
+    { venue: "Folkmoot", start: "2027-01-02", end: null, kind: "offered", fee: 600, off: false as const, city: "Waynesville", state: "NC", note: "$600 offer" },
+    { venue: "Surry Arts", start: "2027-01-02", end: null, kind: "hold", fee: null, off: false as const, city: "Mount Airy", state: "NC", note: "No fee yet" },
+  ];
+  it("refills a row whose venue shows another option's city (a half-done switch)", async () => {
+    const { repairSwitchedRows } = await import("./plan");
+    const wb = workbook({ 3: [46389, "Inquiry", "Surry Arts", "Waynesville", "NC", "$600", "$600 offer"] });
+    const w = repairSwitchedRows(wb, entries);
+    expect(w).toEqual([
+      { range: "'Rakish 2027 Workbook'!B3", values: [["Hold"]] },
+      { range: "'Rakish 2027 Workbook'!D3:G3", values: [["Mount Airy", "NC", "", "No fee yet"]] },
+    ]);
+  });
+  it("leaves rows that match, or whose city is nobody else's (his own correction)", async () => {
+    const { repairSwitchedRows } = await import("./plan");
+    expect(repairSwitchedRows(workbook({ 3: [46389, "Inquiry", "Folkmoot", "Waynesville", "NC"] }), entries)).toEqual([]);
+    expect(repairSwitchedRows(workbook({ 3: [46389, "Inquiry", "Folkmoot", "Asheville", "NC"] }), entries)).toEqual([]);
+  });
+});

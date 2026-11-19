@@ -74,3 +74,8 @@ export async function batchClear(id: string, ranges: string[]): Promise<void> {
 export async function batchUpdate(id: string, requests: unknown[]): Promise<void> {
   if (requests.length) await call(`${id}:batchUpdate`, { method: "POST", body: { requests } });
 }
+
+/** Spreadsheet metadata, narrowed by a fields mask (e.g. conditional formats). */
+export async function getSpreadsheet<T>(id: string, fields: string, ranges: string[] = []): Promise<T> {
+  return call<T>(id, { query: ranges.length ? { fields, ranges } : { fields } });
+}

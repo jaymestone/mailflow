@@ -452,3 +452,29 @@ export function confirmStatus(opts: { artist: string; wb: Workbook; prior: Extra
   }
   return writes;
 }
+
+/** Turns the "On the table" text from tableColumns into a short count with a
+ * dropdown listing each competing option separately (Jayme, Nov 19 2026:
+ * "a visible flag for options in the same day, and maybe a dropdown to see
+ * those offers separately"). Selecting an item changes nothing; the list is
+ * for reading. Returns the K values to write and the validation requests
+ * (every calendar cell in K is reset first, so stale lists never linger). */
+export function tableDropdowns(w: Write, sheetId: number): { write: Write; requests: unknown[] } {
+  const values = w.values.map((r) => [...r]);
+  const requests: unknown[] = [
+    { setDataValidation: { range: { sheetId, startRowIndex: 1, endRowIndex: values.length, startColumnIndex: 10, endColumnIndex: 11 } } },
+  ];
+  for (let i = 1; i < values.length; i++) {
+    const items = String(values[i][0] ?? "").split(" · ").map((s) => s.trim()).filter(Boolean);
+    if (!items.length) continue;
+    const summary = `${items.length} option${items.length > 1 ? "s" : ""}`;
+    values[i][0] = summary;
+    requests.push({
+      setDataValidation: {
+        range: { sheetId, startRowIndex: i, endRowIndex: i + 1, startColumnIndex: 10, endColumnIndex: 11 },
+        rule: { condition: { type: "ONE_OF_LIST", values: [summary, ...items].map((v) => ({ userEnteredValue: v })) }, strict: false, showCustomUi: true },
+      },
+    });
+  }
+  return { write: { range: w.range, values }, requests };
+}

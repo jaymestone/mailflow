@@ -310,3 +310,15 @@ describe("confirmStatus", () => {
     expect(confirmStatus({ artist: "Rakish", wb: edited, prior, lead: lead({ venue: "Blue Strawberry", dates: [{ start: "2027-01-02", end: null, kind: "confirmed" }] }) })).toEqual([]);
   });
 });
+
+describe("tableDropdowns", () => {
+  it("shows a count in K with each option listed in its dropdown", async () => {
+    const { tableDropdowns } = await import("./plan");
+    const w = { range: "'Rakish 2027 Workbook'!K1:L3", values: [["On the table", "Off the table"], ["", ""], ["Surry Arts (asked) · Folkmoot (open for them, $600)", "Thomasville (passed)"]] };
+    const res = tableDropdowns(w, 7);
+    expect(res.write.values[2]).toEqual(["2 options", "Thomasville (passed)"]);
+    expect(res.write.values[1]).toEqual(["", ""]);
+    expect(res.requests).toHaveLength(2);
+    expect((res.requests[1] as any).setDataValidation.rule.condition.values.map((v: any) => v.userEnteredValue)).toEqual(["2 options", "Surry Arts (asked)", "Folkmoot (open for them, $600)"]);
+  });
+});

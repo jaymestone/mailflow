@@ -13,6 +13,7 @@ import {
   relocateLead,
   evictBlocked,
   confirmStatus,
+  tableDropdowns,
   isPlaceholder,
   tableColumns,
   type TableEntry,
@@ -352,6 +353,7 @@ export async function runWorkbookTick(supabase: SupabaseClient, opts: { now?: Da
     v.c.sheet_placements = placements;
   }
   // ---- 2b. On / off the table: every venue talking about each day ---------
+  const validationRequests: unknown[] = [];
   const optionValues: Cell[][] = [];
   const optionKinds: ("artist" | "date" | "live" | "off")[] = [];
   const optionArtists: string[] = [];
@@ -385,9 +387,13 @@ export async function runWorkbookTick(supabase: SupabaseClient, opts: { now?: Da
     // "Talk later" means not this time: the dates they discussed are off the table.
     for (const v of view) add(v.lead.venue, v.lead, v.lead.interest === "talk_later" ? "not now" : false);
     for (const c of all) if (c.sheet_interest === "declined" && c.venue) add(c.venue, { artists: c.sheet_artists ?? [], dates: c.sheet_dates ?? [], fee: null }, "passed");
-    writes.push(tableColumns(wb, entries));
+    // K shows a count with every competing option in a dropdown (Nov 19).
+    const dd = tableDropdowns(tableColumns(wb, entries), sheetIdOf.get(wb.tab) ?? -1);
+    writes.push(dd.write);
+    if (sheetIdOf.has(wb.tab)) validationRequests.push(...dd.requests);
   }
   if (writes.length) await batchUpdateValues(SHEET, writes, "RAW");
+  await batchUpdate(SHEET, validationRequests);
   await writeDateOptions(sheetIdOf.get("Date Options"), optionValues, optionKinds, optionArtists);
   for (const v of view) {
     const changed = !v.c.sheet_synced_at || (v.c.summarized_at && v.c.summarized_at > v.c.sheet_synced_at);

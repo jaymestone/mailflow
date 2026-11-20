@@ -205,26 +205,31 @@ async function cmdDraft(file: string) {
   }
 }
 
-function mime(from: string, headers: string[], body: string) {
+// Optional quoted original (Nov 17 2026: Summer's forwarded school inquiries got
+// fresh stone@ replies that quote the venue's own email under the signature).
+type Quote = { header: string; text: string };
+const quoteText = (q?: Quote) => (q ? `\n\n${q.header}\n\n${q.text.trim().split("\n").map((l) => `> ${l}`).join("\n")}\n` : "");
+const quoteHtml = (q?: Quote) => (q ? `<br><div class="gmail_quote"><div dir="ltr" class="gmail_attr">${esc(q.header)}<br></div><blockquote class="gmail_quote" style="margin:0px 0px 0px 0.8ex;border-left:1px solid rgb(204,204,204);padding-left:1ex">${esc(q.text.trim()).replace(/\n/g, "<br>")}</blockquote></div>` : "");
+function mime(from: string, headers: string[], body: string, quote?: Quote) {
   const boundary = `tour_${Date.now().toString(36)}`;
   return [
     `From: Jayme Stone <${from}>`, ...headers, "MIME-Version: 1.0",
     `Content-Type: multipart/alternative; boundary="${boundary}"`, "",
     `--${boundary}`, "Content-Type: text/plain; charset=UTF-8", "Content-Transfer-Encoding: 8bit", "",
-    `${toText(body.trim())}\n\n${SIGNATURE}\n`,
+    `${toText(body.trim())}\n\n${SIGNATURE}\n${quoteText(quote)}`,
     `--${boundary}`, "Content-Type: text/html; charset=UTF-8", "Content-Transfer-Encoding: 8bit", "",
-    `<div dir="ltr">${toHtml(body.trim())}<div><br></div><div>${SIGNATURE_HTML}</div></div>`,
+    `<div dir="ltr">${toHtml(body.trim())}<div><br></div><div>${SIGNATURE_HTML}</div></div>${quoteHtml(quote)}`,
     `--${boundary}--`, "",
   ].join("\r\n");
 }
 
 async function cmdNew(file: string) {
   const acct = await stoneAccount();
-  const items: { to: string; cc?: string[]; subject: string; body: string; allowPlayed?: boolean }[] = JSON.parse(readFileSync(file, "utf8"));
+  const items: { to: string; cc?: string[]; subject: string; body: string; allowPlayed?: boolean; quote?: Quote }[] = JSON.parse(readFileSync(file, "utf8"));
   for (const it of items) {
     const played = it.allowPlayed ? [] : await playedConflicts(it.body, it.to);
     if (played.length) { console.log(`BLOCKED "${it.subject}": names an artist who played/is booked there: ${played.join("; ")} (set "allowPlayed": true if intended)`); continue; }
-    const raw = mime(acct.email, [`To: ${it.to}`, ...(it.cc?.length ? [`Cc: ${it.cc.join(", ")}`] : []), `Subject: ${encodeHeaderWord(it.subject)}`], it.body);
+    const raw = mime(acct.email, [`To: ${it.to}`, ...(it.cc?.length ? [`Cc: ${it.cc.join(", ")}`] : []), `Subject: ${encodeHeaderWord(it.subject)}`], it.body, it.quote);
     const d = await gmail(acct.token, "drafts", { method: "POST", body: JSON.stringify({ message: { raw: Buffer.from(raw).toString("base64url") } }) });
     console.log(`NEW DRAFT [${acct.email}] "${it.subject}" to ${it.to}${it.cc?.length ? ` cc ${it.cc.join(", ")}` : ""} (draft ${d.id})`);
   }

@@ -638,7 +638,7 @@ From 61 drafts compared with what he actually sent: 14 went out as drafted, abou
 9. **Look for a second artist.** When a room fits another act's routing, he adds a line for them (Vashon got The Little Mercies' August WA run). That's his call: suggest it in NEEDS_YOU rather than writing it in.
 
 ### Standard quotes (what he says when asked; keep nearby venues consistent)
-- **Summer Camargo, schools:** $3500 for one day plus $1000 for each additional day, plus travel and lodging, Summer solo with the school's musicians. (He sent $1000 per extra day even when he'd dictated $1500.) Clubs and festivals: $5k + accommodations (quintet).
+- **Summer Camargo, schools:** $3500 for one day plus $1000 for each additional day, plus travel and lodging, Summer solo with the school's musicians. When several schools are coordinating one visit, it's $1500 per additional day. Clubs and festivals: $5k + accommodations (quintet).
 - **Amanda Pascali:** $4k + one hotel room, one night (NY); $3500 + accommodations elsewhere.
 - **Charlie & The Tropicales:** $6000 + rooms for a standalone or fly-in date; routed regional dates are usually $2–3k + rooms.
 - **The Little Mercies:** $3000 + lodging for a routed date or a contra weekend.

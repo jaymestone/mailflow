@@ -32,6 +32,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     first_name: "Test",
     last_name: "Contact",
     venue: "Test Venue",
+    dates: "April 4–7",
     city: "Test City",
     state: "TS",
     clicked_artists: ["Summer Camargo", "Rakish"],

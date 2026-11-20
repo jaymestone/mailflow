@@ -8,6 +8,9 @@ export type MergeContact = {
   /** The smaller room at a venue with more than one, e.g. "the Lab Theater".
    * See migration 44. */
   room?: string | null;
+  /** Per-member date window for this campaign (campaign_members.dates,
+   * migration 46), e.g. "April 4–7 or April 11–12". */
+  dates?: string | null;
   city?: string | null;
   state?: string | null;
   venue_type?: string | null;
@@ -40,6 +43,10 @@ const MERGE_FIELDS: Record<string, (c: MergeContact) => string> = {
     if (!r) return `at ${MERGE_FIELDS.venue(c)}`;
     return /^(in|at|for|on|as part of) /i.test(r) ? r : `in ${r}`;
   },
+  // No fallback, like {{Clicked Artists}}: a re-routed push names the
+  // dates that fit each venue (Little Mercies, Apr 2027), and a member
+  // without one is skipped rather than offered the wrong dates.
+  dates: (c) => c.dates?.trim() || "{{Dates}}",
   city: (c) => c.city?.trim() || "",
   state: (c) => c.state?.trim() || "",
   "venue type": (c) => c.venue_type?.trim() || "",

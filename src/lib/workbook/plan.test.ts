@@ -364,3 +364,18 @@ describe("repairSwitchedRows", () => {
     expect(repairSwitchedRows(workbook({ 3: [46389, "Inquiry", "Folkmoot", "Asheville", "NC"] }), entries)).toEqual([]);
   });
 });
+
+describe("ownShowPlaces", () => {
+  it("puts an own show's city and state in D:E, carrying them across the run", async () => {
+    const { ownShowPlaces } = await import("./plan");
+    const wb = workbook({
+      3: [46389, "", "", "", "", "", "", "Booked (own show)", "Baltimore MD", "Old Time Fest"],
+      4: [46390, "", "", "", "", "", "", "Booked (own show)"],
+      5: [46391, "", "", "Cary", "NC", "", "", "Booked (own show)", "Cary NC"],
+    });
+    expect(ownShowPlaces(wb)).toEqual([
+      { range: "'Rakish 2027 Workbook'!D3:E3", values: [["Baltimore", "MD"]] },
+      { range: "'Rakish 2027 Workbook'!D4:E4", values: [["Baltimore", "MD"]] },
+    ]);
+  });
+});

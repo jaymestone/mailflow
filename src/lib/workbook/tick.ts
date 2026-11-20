@@ -14,6 +14,7 @@ import {
   evictBlocked,
   joinNote,
   repairSwitchedRows,
+  ownShowPlaces,
   nextPart,
   carriedParts,
   confirmStatus,
@@ -407,6 +408,7 @@ export async function runWorkbookTick(supabase: SupabaseClient, opts: { now?: Da
     const sid = sheetIdOf.get(wb.tab);
     if (sid != null) {
       if (venueDropdownsOn) {
+        writes.push(...ownShowPlaces(wb));
         const repaired = repairSwitchedRows(wb, entries);
         writes.push(...repaired);
         result.switchRepairs = (result.switchRepairs ?? 0) + repaired.length / 2;

@@ -573,3 +573,26 @@ export function repairSwitchedRows(wb: Workbook, entries: TableEntry[]): Write[]
   }
   return writes;
 }
+
+/** Own shows show their place in City/State like every other booking
+ * (Jayme, Nov 19: "put the city and state in the column the other entries
+ * are in so it's easier to see"). The band's mirror gives Where (I) as
+ * "Panama City FL" on the first day only; later days of the same run
+ * inherit it. Only empty City/State cells are filled. */
+export function ownShowPlaces(wb: Workbook): Write[] {
+  const writes: Write[] = [];
+  let carry: [string, string] | null = null;
+  const rows = [...wb.rowOfIso.values()].sort((a, b) => a - b);
+  for (const row of rows) {
+    if (!/booked/i.test(cell(wb, row, 7))) { carry = null; continue; }
+    const where = cell(wb, row, 8);
+    const m = where.match(/^(.*?),?\s+([A-Z]{2})$/);
+    if (m) carry = [m[1].trim(), m[2]];
+    else if (where) carry = [where, ""];
+    if (!carry || cell(wb, row, 3) || cell(wb, row, 4)) continue;
+    const r = wb.grid[row - 1] ?? (wb.grid[row - 1] = []);
+    r[3] = carry[0]; r[4] = carry[1];
+    writes.push({ range: `'${wb.tab}'!D${row}:E${row}`, values: [[carry[0], carry[1]]] });
+  }
+  return writes;
+}

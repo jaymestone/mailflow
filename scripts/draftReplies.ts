@@ -11,6 +11,7 @@ import { createClient } from "@supabase/supabase-js";
 import { writeFileSync } from "fs";
 import { getAccessToken, encodeHeaderWord } from "../src/lib/gmail/client";
 import { systemPrompt, examplesFor, historyFor, routingFor } from "../src/lib/drafting/prompt";
+import { loadCalendars, calendarFor, dealFor, type Calendars } from "../src/lib/drafting/calendar";
 
 // --when "SENDS 11AM, 2PM OR 5PM": what the approval line promises. The
 // scheduled send matches on the fixed prefix (APPROVE_PREFIX).
@@ -36,6 +37,7 @@ const exclude = new Set((args.includes("--exclude") ? args[args.indexOf("--exclu
 const OWN = /@jaymestone(agency)?\.com$|@followupthen\.com$|^noreply@|^no-reply@/i; // Jayme's own addresses + his reminder service
 
 const SYSTEM = systemPrompt();
+let calendars: Calendars | null = null; // artist workbooks: busy days
 let routingSnap: any = null; // loaded in main from app_settings "routing_snapshot"
 
 type Msg = { from: string; to: string; cc: string; date: string; subject: string; messageId: string; references: string; text: string };
@@ -63,11 +65,12 @@ async function pool<T>(items: T[], n: number, fn: (x: T) => Promise<void>) {
 }
 
 (async () => {
+  calendars = await loadCalendars(); // fail loudly: never draft dates blind
   routingSnap = (await supabase.from("app_settings").select("value").eq("key", "routing_snapshot").maybeSingle()).data?.value ?? null;
   const { data: acct } = await supabase.from("connected_accounts").select("id").eq("email_address", "stone@jaymestone.com").single();
   const token = await getAccessToken(supabase, acct!.id);
   const since = new Date(Date.now() - days * 864e5).toISOString();
-  let cq = supabase.from("conversations").select("id,venue,artist,status,status_override,thread_key,gmail_thread_ids,last_message_at,contact_id,contacts(email,city,state,country,lat,lng)").eq("is_live", true);
+  let cq = supabase.from("conversations").select("id,venue,artist,status,status_override,thread_key,gmail_thread_ids,last_message_at,contact_id,gist,sheet_note,sheet_next_step,sheet_dates,contacts(email,city,state,country,lat,lng)").eq("is_live", true);
   cq = followups || catchup ? cq.eq("last_direction", "outbound").lt("last_message_at", since) : cq.eq("last_direction", "inbound").gte("last_message_at", since);
   const { data: convs } = await cq.order("last_message_at", { ascending: false });
   let todo = (convs || []).filter((c) => !/@jaymestone(agency)?\.com::/.test(c.thread_key) && (c.status_override || c.status) !== "parked");
@@ -114,8 +117,8 @@ async function pool<T>(items: T[], n: number, fn: (x: T) => Promise<void>) {
         const lastMs = Date.parse(last.date);
         if (!Number.isNaN(lastMs) && Date.now() - lastMs < days * 864e5) { out.push({ venue: c.venue, skipped: "Jayme followed up recently" }); return; }
       }
-      const transcript = msgs.slice(-6).map((m) => `From: ${m.from}\nDate: ${m.date}\n\n${m.text}`).join("\n\n-----\n\n");
-      const res = await anthropic.messages.create({ model: "claude-opus-5-5", max_tokens: 2000, thinking: { type: "adaptive" }, system: [{ type: "text", text: SYSTEM, cache_control: { type: "ephemeral" } }], messages: [{ role: "user", content: `Venue: ${c.venue}${c.artist ? ` (artist discussed: ${c.artist})` : ""}\nThread (oldest first):\n\n${transcript}${examplesFor(transcript)}${historyFor((c as any).contacts)}${routingFor(routingSnap, c.id, (c as any).contacts)}\n\n${followups ? `Jayme wrote the last message ${Math.round((Date.now() - Date.parse(c.last_message_at)) / 864e5)} days ago and hasn't heard back. Draft a short, friendly check-in (1–3 sentences) that picks up exactly where things were left — e.g. "Just checking back to see if you've had a chance to consider…" — without repeating the pitch. If Jayme's last message was a sign-off like "I'll check in when someone on the roster is headed your way" and there's nothing specific to follow up on, answer SKIP.` : "Draft Jayme's reply to the last message."}` }] });
+      const transcript = msgs.slice(-10).map((m) => `From: ${m.from}\nDate: ${m.date}\n\n${m.text}`).join("\n\n-----\n\n");
+      const res = await anthropic.messages.create({ model: "claude-opus-5-5", max_tokens: 2000, thinking: { type: "adaptive" }, system: [{ type: "text", text: SYSTEM, cache_control: { type: "ephemeral" } }], messages: [{ role: "user", content: `Venue: ${c.venue}${c.artist ? ` (artist discussed: ${c.artist})` : ""}\nThread (oldest first):\n\n${transcript}${examplesFor(transcript)}${historyFor((c as any).contacts)}${routingFor(routingSnap, c.id, (c as any).contacts)}${dealFor(c as any)}${calendarFor(calendars, `${c.artist ?? ""} ${(c as any).gist ?? ""} ${transcript}`)}\n\n${followups ? `Jayme wrote the last message ${Math.round((Date.now() - Date.parse(c.last_message_at)) / 864e5)} days ago and hasn't heard back. Draft a short, friendly check-in (1–3 sentences) that picks up exactly where things were left — e.g. "Just checking back to see if you've had a chance to consider…" — without repeating the pitch. Answer SKIP if no follow-up is needed yet: the venue already has everything and said when they'll decide or get back (e.g. \"we'll know in December\", \"I start on fall in January\", \"booked through spring, circle back then\") and that time hasn't arrived; or they said they'll be in touch after a step that hasn't happened. Don't bug anyone who doesn't need a nudge. If Jayme's last message was a sign-off like "I'll check in when someone on the roster is headed your way" and there's nothing specific to follow up on, answer SKIP.` : "Draft Jayme's reply to the last message."}` }] });
       const textOut = res.content.filter((b: any) => b.type === "text").map((b: any) => b.text).join("").trim();
       const m = textOut.match(/NEEDS_YOU:\s*(.*)\n-{3,}\n([\s\S]*)/);
       if (!m) { out.push({ venue: c.venue, skipped: "model output unparsed" }); return; }

@@ -55,3 +55,4 @@ scripts/.jayme-inbox-extract.json
 .voice-notes.json
 .voice-eval*.json
 .voice-judge.json
+.drafts-removed-*.json

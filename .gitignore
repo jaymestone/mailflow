@@ -56,3 +56,5 @@ scripts/.jayme-inbox-extract.json
 .voice-eval*.json
 .voice-judge.json
 .drafts-removed-*.json
+.draft-diffs.json
+.draft-originals.jsonl

@@ -8,7 +8,7 @@
 // Writes the created draft ids to .draft-replies.json.
 import Anthropic from "@anthropic-ai/sdk";
 import { createClient } from "@supabase/supabase-js";
-import { writeFileSync } from "fs";
+import { appendFileSync, writeFileSync } from "fs";
 import { getAccessToken, encodeHeaderWord } from "../src/lib/gmail/client";
 import { systemPrompt, examplesFor, historyFor, routingFor } from "../src/lib/drafting/prompt";
 import { loadCalendars, calendarFor, dealFor, type Calendars } from "../src/lib/drafting/calendar";
@@ -137,7 +137,8 @@ async function pool<T>(items: T[], n: number, fn: (x: T) => Promise<void>) {
       const d = await gmail(token, "drafts", { method: "POST", body: JSON.stringify({ message: { threadId, raw: Buffer.from(raw).toString("base64url") } }) });
       out.push({ venue: c.venue, draftId: d.id, threadId, needsYou: /^none$/i.test(needs) ? undefined : needs, body, createdAt: new Date().toISOString() });
       // Keep every original so Jayme's edits can be compared against it later.
-      await supabase.from("draft_originals").insert({ draft_id: d.id, thread_id: threadId, venue: c.venue, mode: catchup ? "catchup" : followups ? "followup" : "reply", needs_you: /^none$/i.test(needs) ? null : needs, body }).then(() => {}, () => {});
+      // (The draft_originals table never existed, so these inserts silently failed until Nov 20; a local log is enough.)
+      appendFileSync(".draft-originals.jsonl", JSON.stringify({ draft_id: d.id, thread_id: threadId, venue: c.venue, mode: catchup ? "catchup" : followups ? "followup" : "reply", needs_you: /^none$/i.test(needs) ? null : needs, body, created_at: new Date().toISOString() }) + "\n");
       console.log(`DRAFT ${c.venue}${/^none$/i.test(needs) ? "" : "  [NEEDS YOU: " + needs + "]"}`);
     } catch (e: any) { out.push({ venue: c.venue, skipped: "error: " + String(e?.message || e).slice(0, 160) }); }
   });

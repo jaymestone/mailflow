@@ -188,8 +188,14 @@ function isWithinSendWindow(sendWindow: {
   start_hour: number;
   end_hour: number;
   timezone: string;
+  /** "YYYY-MM-DD": no campaign sends before this local date (Jayme, Nov 25 2026: Thanksgiving pause). */
+  paused_until?: string;
 }): boolean {
   const now = new Date();
+  if (sendWindow.paused_until) {
+    const today = new Intl.DateTimeFormat("en-CA", { timeZone: sendWindow.timezone }).format(now); // YYYY-MM-DD
+    if (today < sendWindow.paused_until) return false;
+  }
   const formatter = new Intl.DateTimeFormat("en-US", {
     timeZone: sendWindow.timezone,
     weekday: "short",

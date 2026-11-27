@@ -154,6 +154,7 @@ type DueMember = {
   venue_short: string | null;
   room: string | null;
   dates: string | null;
+  merge: Record<string, string> | null;
   city: string | null;
   state: string | null;
   venue_type: string | null;

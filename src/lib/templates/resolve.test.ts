@@ -138,3 +138,16 @@ describe("findUnresolvedTokens", () => {
     expect(findUnresolvedTokens("hello}")).toEqual(["}"]);
   });
 });
+
+describe("per-member merge values", () => {
+  it("fills a custom field from merge, case-insensitively", () => {
+    expect(resolveMergeFields("{{Lead}} X {{Venue}}", { venue: "Hall", merge: { lead: "Rakish" } })).toBe("Rakish X Hall");
+  });
+  it("leaves the token when the member has no value, so the send is skipped", () => {
+    const out = resolveTemplate("Hi {{Picks}}", { merge: { lead: "x" } });
+    expect(findUnresolvedTokens(out).length).toBeGreaterThan(0);
+  });
+  it("never lets merge override a built-in field", () => {
+    expect(resolveMergeFields("{{First Name}}", { first_name: "Ann", merge: { "first name": "Bob" } })).toBe("Ann");
+  });
+});

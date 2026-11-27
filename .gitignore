@@ -58,3 +58,4 @@ scripts/.jayme-inbox-extract.json
 .drafts-removed-*.json
 .draft-diffs.json
 .draft-originals.jsonl
+.analysis/

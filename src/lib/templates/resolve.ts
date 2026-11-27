@@ -18,6 +18,11 @@ export type MergeContact = {
    * capped and ordered by src/lib/clicks/interest.ts. Only ever populated
    * for the clicked_focused variant of a step. */
   clicked_artists?: string[] | null;
+  /** Per-member merge values (campaign_members.merge, migration 47). Any
+   * {{Field}} that isn't built in is looked up here by lower-case key. No
+   * fallback: a member without the key keeps the token, and the send
+   * engine skips it rather than send a blank. */
+  merge?: Record<string, string> | null;
 };
 
 const MERGE_FIELDS: Record<string, (c: MergeContact) => string> = {
@@ -76,8 +81,11 @@ export function formatArtistList(names: string[]): string {
  * the merge step ever sees it. */
 export function resolveMergeFields(text: string, contact: MergeContact): string {
   return text.replace(/\{\{\s*([^{}]+?)\s*\}\}/g, (match, fieldName: string) => {
-    const resolver = MERGE_FIELDS[fieldName.trim().toLowerCase()];
-    return resolver ? resolver(contact) : match;
+    const key = fieldName.trim().toLowerCase();
+    const resolver = MERGE_FIELDS[key];
+    if (resolver) return resolver(contact);
+    const own = contact.merge?.[key];
+    return typeof own === "string" && own.trim() ? own : match;
   });
 }
 
